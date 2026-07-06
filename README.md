@@ -39,12 +39,17 @@ Edit `BorderlessMode.ini` and restart the game.
 
 ```ini
 [BorderlessMode]
+Log=1
 AntiAFK=0
 ```
 
 | Key | Default | Meaning |
 | --- | ------- | ------- |
+| `Log` | `1` | `1` writes `BorderlessMode.log` next to the ASI for diagnostics. |
 | `AntiAFK` | `0` | `1` makes the game keep running while minimized or in the background. |
+
+The log is recreated on each game start. If the game hangs or shows a black
+screen, close the process and send `BorderlessMode.log` from the GTA SA folder.
 
 Anti-AFK rewrites focus-loss window messages such as `WM_ACTIVATE`,
 `WM_ACTIVATEAPP`, `WM_NCACTIVATE` and `WM_KILLFOCUS`. DirectInput still prevents
