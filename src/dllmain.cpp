@@ -16,10 +16,13 @@ constexpr int kVtableReset = 16;
 const wchar_t kIniSection[] = L"BorderlessMode";
 const wchar_t kLegacyIniSection[] = L"SABorderless";
 
-const char kDefaultIni[] =
-    "[BorderlessMode]\r\n"
-    "AntiAFK=0\r\n"
-    "Log=1\r\n";
+// UTF-16 LE with BOM: the profile APIs read it natively, and text editors
+// stop misdetecting the short file as UTF-16 mojibake ("Chinese" text).
+const wchar_t kDefaultIni[] =
+    L"\xFEFF"
+    L"[BorderlessMode]\r\n"
+    L"AntiAFK=0\r\n"
+    L"Log=1\r\n";
 
 enum ConvertMode {
     ConvertNone = 0,
@@ -241,7 +244,8 @@ void CreateDefaultIniIfMissing(const wchar_t* path) {
     }
 
     DWORD written = 0;
-    WriteFile(file, kDefaultIni, sizeof(kDefaultIni) - 1, &written, nullptr);
+    WriteFile(file, kDefaultIni, sizeof(kDefaultIni) - sizeof(wchar_t), &written,
+              nullptr);
     CloseHandle(file);
 }
 
@@ -266,6 +270,12 @@ void LoadConfig() {
 }
 
 bool g_borderlessApplied = false;
+
+DEVMODEW g_desktopMode = {};
+bool g_haveDesktopMode = false;
+
+// Defined next to the ChangeDisplaySettings hooks below.
+void RestoreDesktopMode(const char* reason);
 
 const LONG kFrameStyleBits = WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX |
                              WS_MAXIMIZEBOX | WS_SYSMENU | WS_BORDER | WS_DLGFRAME;
@@ -305,6 +315,7 @@ LRESULT CALLBACK GameWndProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
                 window, static_cast<unsigned>(wParam),
                 LOWORD(lParam), HIWORD(lParam));
             RequireNextReset("WM_DISPLAYCHANGE");
+            RestoreDesktopMode("WM_DISPLAYCHANGE");
             break;
         case WM_STYLECHANGING:
             Log("wnd WM_STYLECHANGING window=0x%p index=%ld borderless=%d",
@@ -846,6 +857,279 @@ void ApplyNoFrameDelay() {
     }
 }
 
+using ChangeDisplaySettingsAFn = LONG (WINAPI*)(DEVMODEA* devMode, DWORD flags);
+using ChangeDisplaySettingsWFn = LONG (WINAPI*)(DEVMODEW* devMode, DWORD flags);
+using ChangeDisplaySettingsExAFn = LONG (WINAPI*)(LPCSTR device, DEVMODEA* devMode,
+                                                  HWND window, DWORD flags,
+                                                  LPVOID param);
+using ChangeDisplaySettingsExWFn = LONG (WINAPI*)(LPCWSTR device, DEVMODEW* devMode,
+                                                  HWND window, DWORD flags,
+                                                  LPVOID param);
+
+ChangeDisplaySettingsAFn g_originalChangeDisplaySettingsA = nullptr;
+ChangeDisplaySettingsWFn g_originalChangeDisplaySettingsW = nullptr;
+ChangeDisplaySettingsExAFn g_originalChangeDisplaySettingsExA = nullptr;
+ChangeDisplaySettingsExWFn g_originalChangeDisplaySettingsExW = nullptr;
+
+void LogDisplayModeRequest(const char* label, void* caller,
+                           DWORD fields, DWORD width, DWORD height,
+                           DWORD frequency, DWORD flags, bool normalized) {
+    char callerText[160] = {};
+    FormatCallerAddress(caller, callerText, sizeof(callerText));
+    Log("%s: mode=%ux%u@%u fields=0x%08lX flags=0x%08lX caller=%s%s",
+        label, width, height, frequency, fields, flags, callerText,
+        normalized ? " -> normalizing to desktop mode" : "");
+}
+
+// Suppressing these calls outright freezes the AppCompat path inside d3d9
+// (DWM8And16BitMitigation shim), so forward them with the desktop mode
+// instead: the caller gets a genuine success and no real mode switch happens.
+void BuildDesktopDevModeW(DEVMODEW* out) {
+    *out = g_desktopMode;
+    out->dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_BITSPERPEL |
+                    DM_DISPLAYFREQUENCY;
+}
+
+void BuildDesktopDevModeA(DEVMODEA* out) {
+    std::memset(out, 0, sizeof(*out));
+    out->dmSize = sizeof(*out);
+    out->dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_BITSPERPEL |
+                    DM_DISPLAYFREQUENCY;
+    out->dmPelsWidth = g_desktopMode.dmPelsWidth;
+    out->dmPelsHeight = g_desktopMode.dmPelsHeight;
+    out->dmBitsPerPel = g_desktopMode.dmBitsPerPel;
+    out->dmDisplayFrequency = g_desktopMode.dmDisplayFrequency;
+}
+
+bool ReadDevModeA(const DEVMODEA* mode, DWORD* fields, DWORD* width,
+                  DWORD* height, DWORD* frequency) {
+    __try {
+        if (mode) {
+            *fields = mode->dmFields;
+            *width = mode->dmPelsWidth;
+            *height = mode->dmPelsHeight;
+            *frequency = mode->dmDisplayFrequency;
+        }
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+bool ReadDevModeW(const DEVMODEW* mode, DWORD* fields, DWORD* width,
+                  DWORD* height, DWORD* frequency) {
+    __try {
+        if (mode) {
+            *fields = mode->dmFields;
+            *width = mode->dmPelsWidth;
+            *height = mode->dmPelsHeight;
+            *frequency = mode->dmDisplayFrequency;
+        }
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// While borderless is active the desktop mode must stay untouched. GTA SA
+// (and the AppCompat shims around d3d9) still believe the game runs exclusive
+// fullscreen and switch the display mode, causing slow alt-tabs with monitor
+// re-syncs. Requests are forwarded with the desktop mode substituted in.
+LONG WINAPI HookedChangeDisplaySettingsA(DEVMODEA* devMode, DWORD flags) {
+    DWORD fields = 0, width = 0, height = 0, frequency = 0;
+    ReadDevModeA(devMode, &fields, &width, &height, &frequency);
+    bool normalize = g_borderlessApplied && devMode && g_haveDesktopMode;
+    LogDisplayModeRequest("ChangeDisplaySettingsA", _ReturnAddress(),
+                          fields, width, height, frequency, flags, normalize);
+    if (normalize) {
+        DEVMODEA desktop;
+        BuildDesktopDevModeA(&desktop);
+        return g_originalChangeDisplaySettingsA(&desktop, flags);
+    }
+    return g_originalChangeDisplaySettingsA(devMode, flags);
+}
+
+LONG WINAPI HookedChangeDisplaySettingsW(DEVMODEW* devMode, DWORD flags) {
+    DWORD fields = 0, width = 0, height = 0, frequency = 0;
+    ReadDevModeW(devMode, &fields, &width, &height, &frequency);
+    bool normalize = g_borderlessApplied && devMode && g_haveDesktopMode;
+    LogDisplayModeRequest("ChangeDisplaySettingsW", _ReturnAddress(),
+                          fields, width, height, frequency, flags, normalize);
+    if (normalize) {
+        DEVMODEW desktop;
+        BuildDesktopDevModeW(&desktop);
+        return g_originalChangeDisplaySettingsW(&desktop, flags);
+    }
+    return g_originalChangeDisplaySettingsW(devMode, flags);
+}
+
+LONG WINAPI HookedChangeDisplaySettingsExA(LPCSTR device, DEVMODEA* devMode,
+                                           HWND window, DWORD flags,
+                                           LPVOID param) {
+    DWORD fields = 0, width = 0, height = 0, frequency = 0;
+    ReadDevModeA(devMode, &fields, &width, &height, &frequency);
+    bool normalize = g_borderlessApplied && devMode && g_haveDesktopMode;
+    LogDisplayModeRequest("ChangeDisplaySettingsExA", _ReturnAddress(),
+                          fields, width, height, frequency, flags, normalize);
+    if (normalize) {
+        DEVMODEA desktop;
+        BuildDesktopDevModeA(&desktop);
+        return g_originalChangeDisplaySettingsExA(device, &desktop, window, flags,
+                                                  param);
+    }
+    return g_originalChangeDisplaySettingsExA(device, devMode, window, flags, param);
+}
+
+LONG WINAPI HookedChangeDisplaySettingsExW(LPCWSTR device, DEVMODEW* devMode,
+                                           HWND window, DWORD flags,
+                                           LPVOID param) {
+    DWORD fields = 0, width = 0, height = 0, frequency = 0;
+    ReadDevModeW(devMode, &fields, &width, &height, &frequency);
+    bool normalize = g_borderlessApplied && devMode && g_haveDesktopMode;
+    LogDisplayModeRequest("ChangeDisplaySettingsExW", _ReturnAddress(),
+                          fields, width, height, frequency, flags, normalize);
+    if (normalize) {
+        DEVMODEW desktop;
+        BuildDesktopDevModeW(&desktop);
+        return g_originalChangeDisplaySettingsExW(device, &desktop, window, flags,
+                                                  param);
+    }
+    return g_originalChangeDisplaySettingsExW(device, devMode, window, flags, param);
+}
+
+// Walks the module's export table directly. GetProcAddress can be hooked by
+// other mods and hand out redirected pointers; hooking those misses callers
+// that resolved the real export through their import tables.
+void* ResolveExportFromTable(HMODULE module, const char* name) {
+    __try {
+        const BYTE* base = reinterpret_cast<const BYTE*>(module);
+        const IMAGE_DOS_HEADER* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+        if (dos->e_magic != IMAGE_DOS_SIGNATURE) {
+            return nullptr;
+        }
+        const IMAGE_NT_HEADERS* nt =
+            reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+        if (nt->Signature != IMAGE_NT_SIGNATURE) {
+            return nullptr;
+        }
+        const IMAGE_DATA_DIRECTORY& dir =
+            nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+        if (!dir.VirtualAddress || !dir.Size) {
+            return nullptr;
+        }
+        const IMAGE_EXPORT_DIRECTORY* exports =
+            reinterpret_cast<const IMAGE_EXPORT_DIRECTORY*>(base + dir.VirtualAddress);
+        const DWORD* names = reinterpret_cast<const DWORD*>(base + exports->AddressOfNames);
+        const WORD* ordinals =
+            reinterpret_cast<const WORD*>(base + exports->AddressOfNameOrdinals);
+        const DWORD* functions =
+            reinterpret_cast<const DWORD*>(base + exports->AddressOfFunctions);
+        for (DWORD i = 0; i < exports->NumberOfNames; ++i) {
+            if (std::strcmp(reinterpret_cast<const char*>(base + names[i]), name) != 0) {
+                continue;
+            }
+            DWORD rva = functions[ordinals[i]];
+            if (rva >= dir.VirtualAddress && rva < dir.VirtualAddress + dir.Size) {
+                return nullptr;  // forwarded export
+            }
+            return const_cast<BYTE*>(base) + rva;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return nullptr;
+}
+
+void HookOneExport(HMODULE module, const char* name, void* hook, void** original) {
+    void* fromGetProc = reinterpret_cast<void*>(GetProcAddress(module, name));
+    void* fromTable = ResolveExportFromTable(module, name);
+    void* target = fromTable ? fromTable : fromGetProc;
+    if (!target) {
+        Log("%s hook skipped: export not found", name);
+        return;
+    }
+    char targetText[160] = {};
+    FormatCallerAddress(target, targetText, sizeof(targetText));
+    if (fromGetProc && fromGetProc != target) {
+        char getProcText[160] = {};
+        FormatCallerAddress(fromGetProc, getProcText, sizeof(getProcText));
+        Log("%s export mismatch: table=%s GetProcAddress=%s (hooking table address)",
+            name, targetText, getProcText);
+    }
+    MH_STATUS create = MH_CreateHook(target, hook, original);
+    MH_STATUS enable = create == MH_OK ? MH_EnableHook(target) : create;
+    Log("%s hook: target=%s create=%d enable=%d", name, targetText, create, enable);
+    if (create != MH_OK || enable != MH_OK) {
+        *original = nullptr;
+    }
+}
+
+void CaptureDesktopMode() {
+    g_desktopMode.dmSize = sizeof(g_desktopMode);
+    g_haveDesktopMode =
+        EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &g_desktopMode) != FALSE;
+    Log("desktop mode captured: %ux%u@%u bpp=%u have=%d",
+        g_desktopMode.dmPelsWidth, g_desktopMode.dmPelsHeight,
+        g_desktopMode.dmDisplayFrequency, g_desktopMode.dmBitsPerPel,
+        g_haveDesktopMode ? 1 : 0);
+}
+
+// Someone (game, driver, another process) may still switch the real display
+// mode behind the windowed device; put the desktop mode back immediately.
+void RestoreDesktopMode(const char* reason) {
+    if (!g_haveDesktopMode || !g_borderlessApplied) {
+        return;
+    }
+
+    DEVMODEW current = {};
+    current.dmSize = sizeof(current);
+    if (!EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &current)) {
+        Log("display restore skipped: EnumDisplaySettings failed (%s)", reason);
+        return;
+    }
+
+    Log("display mode check (%s): current=%ux%u@%u bpp=%u desktop=%ux%u@%u bpp=%u",
+        reason,
+        current.dmPelsWidth, current.dmPelsHeight,
+        current.dmDisplayFrequency, current.dmBitsPerPel,
+        g_desktopMode.dmPelsWidth, g_desktopMode.dmPelsHeight,
+        g_desktopMode.dmDisplayFrequency, g_desktopMode.dmBitsPerPel);
+
+    if (current.dmPelsWidth == g_desktopMode.dmPelsWidth &&
+        current.dmPelsHeight == g_desktopMode.dmPelsHeight &&
+        current.dmDisplayFrequency == g_desktopMode.dmDisplayFrequency &&
+        current.dmBitsPerPel == g_desktopMode.dmBitsPerPel) {
+        return;
+    }
+
+    if (!g_originalChangeDisplaySettingsW) {
+        Log("display restore skipped: ChangeDisplaySettingsW trampoline missing");
+        return;
+    }
+
+    DEVMODEW restore = g_desktopMode;
+    LONG result = g_originalChangeDisplaySettingsW(&restore, 0);
+    Log("display restore: result=%ld", result);
+}
+
+void HookChangeDisplaySettings() {
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    if (!user32) {
+        return;
+    }
+    HookOneExport(user32, "ChangeDisplaySettingsA",
+                  reinterpret_cast<void*>(&HookedChangeDisplaySettingsA),
+                  reinterpret_cast<void**>(&g_originalChangeDisplaySettingsA));
+    HookOneExport(user32, "ChangeDisplaySettingsW",
+                  reinterpret_cast<void*>(&HookedChangeDisplaySettingsW),
+                  reinterpret_cast<void**>(&g_originalChangeDisplaySettingsW));
+    HookOneExport(user32, "ChangeDisplaySettingsExA",
+                  reinterpret_cast<void*>(&HookedChangeDisplaySettingsExA),
+                  reinterpret_cast<void**>(&g_originalChangeDisplaySettingsExA));
+    HookOneExport(user32, "ChangeDisplaySettingsExW",
+                  reinterpret_cast<void*>(&HookedChangeDisplaySettingsExW),
+                  reinterpret_cast<void**>(&g_originalChangeDisplaySettingsExW));
+}
+
 BOOL WINAPI HookedSetCursorPos(int x, int y) {
     HWND foreground = GetForegroundWindow();
     DWORD pid = 0;
@@ -916,6 +1200,8 @@ DWORD WINAPI Initialize(LPVOID) {
 
     ApplyNoFrameDelay();
     HookSetCursorPos();
+    CaptureDesktopMode();
+    HookChangeDisplaySettings();
 
     HMODULE d3d9 = LoadLibraryW(L"d3d9.dll");
     if (!d3d9) {
