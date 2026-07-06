@@ -1,5 +1,6 @@
 #include <windows.h>
 #include <d3d9.h>
+#include <intrin.h>
 
 #include <cstdarg>
 #include <cstdio>
@@ -515,26 +516,35 @@ void ApplyWindowedPresentParams(D3DPRESENT_PARAMETERS* params) {
     }
 }
 
-ConvertMode ConvertPresentParams(D3DPRESENT_PARAMETERS* params,
-                                 D3DPRESENT_PARAMETERS* backup) {
+// Fills `converted` with a fixed-up copy of the caller's parameters. The
+// caller's struct is never written: for GTA SA it is a persistent global
+// (0xC9C040) that other mods read and write, so in-place edits leak into
+// their logic and can re-trigger their reset handling.
+ConvertMode ConvertPresentParams(const D3DPRESENT_PARAMETERS* source,
+                                 D3DPRESENT_PARAMETERS* converted) {
     __try {
-        if (!params) {
+        if (!source) {
             Log("convert skipped: params=null");
             return ConvertNone;
         }
 
-        if (params->Windowed) {
-            if (params->PresentationInterval == D3DPRESENT_INTERVAL_IMMEDIATE) {
+        if (source->Windowed) {
+            if (source->PresentationInterval == D3DPRESENT_INTERVAL_IMMEDIATE &&
+                source->FullScreen_RefreshRateInHz == 0) {
                 return ConvertNone;
             }
 
-            *backup = *params;
-            params->PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;
+            *converted = *source;
+            converted->PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;
+            // Windowed devices must not carry a fullscreen refresh rate.
+            // Mods such as GameTweaker keep writing one into the game's
+            // global present params, which real d3d9 rejects when windowed.
+            converted->FullScreen_RefreshRateInHz = 0;
             return ConvertVsyncOnly;
         }
 
-        *backup = *params;
-        ApplyWindowedPresentParams(params);
+        *converted = *source;
+        ApplyWindowedPresentParams(converted);
         return ConvertFullscreen;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         Log("convert failed with exception");
@@ -542,15 +552,26 @@ ConvertMode ConvertPresentParams(D3DPRESENT_PARAMETERS* params,
     }
 }
 
-bool RestorePresentParams(D3DPRESENT_PARAMETERS* params,
-                          const D3DPRESENT_PARAMETERS* backup) {
-    __try {
-        *params = *backup;
-        Log("present params restored for fallback");
-        return true;
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        Log("present params restore failed with exception");
-        return false;
+void FormatCallerAddress(void* address, char* buffer, size_t size) {
+    HMODULE module = nullptr;
+    if (address &&
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                               GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCWSTR>(address), &module) &&
+        module) {
+        wchar_t path[MAX_PATH] = {};
+        const wchar_t* name = path;
+        if (GetModuleFileNameW(module, path, MAX_PATH)) {
+            const wchar_t* slash = wcsrchr(path, L'\\');
+            if (slash) {
+                name = slash + 1;
+            }
+        }
+        std::snprintf(buffer, size, "0x%p (%ls+0x%X)", address, name,
+                      static_cast<unsigned>(reinterpret_cast<uintptr_t>(address) -
+                                            reinterpret_cast<uintptr_t>(module)));
+    } else {
+        std::snprintf(buffer, size, "0x%p (unknown module)", address);
     }
 }
 
@@ -628,61 +649,59 @@ void AfterReset(IDirect3DDevice9* device,
 }
 
 HRESULT WINAPI HookedReset(IDirect3DDevice9* device, D3DPRESENT_PARAMETERS* params) {
-    D3DPRESENT_PARAMETERS original = {};
-    ConvertMode mode = ConvertPresentParams(params, &original);
+    void* caller = _ReturnAddress();
 
-    bool redundant = IsRedundantReset(device, params);
+    D3DPRESENT_PARAMETERS converted = {};
+    ConvertMode mode = ConvertPresentParams(params, &converted);
+    D3DPRESENT_PARAMETERS* effective = mode == ConvertNone ? params : &converted;
+
+    bool redundant = IsRedundantReset(device, effective);
     if (redundant && g_haveForwardedReset) {
         ++g_suppressedRedundantResetCount;
         if (g_suppressedRedundantResetCount <= 10 ||
             (g_suppressedRedundantResetCount % 100) == 0) {
-            Log("Reset return: suppressed redundant D3D_OK count=%d",
-                g_suppressedRedundantResetCount);
+            char callerText[160] = {};
+            FormatCallerAddress(caller, callerText, sizeof(callerText));
+            Log("Reset return: suppressed redundant D3D_OK count=%d caller=%s",
+                g_suppressedRedundantResetCount, callerText);
         }
         return D3D_OK;
     }
 
-    Log("Reset enter: device=0x%p params=0x%p", device, params);
-    LogPresentParams("Reset input", mode == ConvertNone ? params : &original);
-    LogPresentParams("Reset converted", params);
+    char callerText[160] = {};
+    FormatCallerAddress(caller, callerText, sizeof(callerText));
+    Log("Reset enter: device=0x%p params=0x%p caller=%s", device, params, callerText);
+    LogPresentParams("Reset input", params);
+    if (mode != ConvertNone) {
+        LogPresentParams("Reset converted", &converted);
+    }
     Log("Reset conversion mode=%s", ConvertModeName(mode));
 
     if (redundant) {
         Log("Reset redundant-looking request: forwarding first required Reset");
     }
 
-    HRESULT result = g_originalReset(device, params);
+    HRESULT result = g_originalReset(device, effective);
     g_suppressedRedundantResetCount = 0;
     Log("Reset original result=0x%08lX", result);
 
-    if (mode == ConvertNone) {
-        if (SUCCEEDED(result)) {
-            RememberAppliedParams(params);
-            g_haveForwardedReset = true;
-        }
-        Log("Reset return: result=0x%08lX", result);
-        return result;
-    }
-
-    if (SUCCEEDED(result)) {
-        RememberAppliedParams(params);
-        g_haveForwardedReset = true;
-        AfterReset(device, params, mode);
-        Log("Reset return: converted result=0x%08lX", result);
-        return result;
-    }
-
-    if (RestorePresentParams(params, &original)) {
+    if (FAILED(result) && mode != ConvertNone) {
         LogPresentParams("Reset fallback input", params);
         result = g_originalReset(device, params);
         Log("Reset fallback result=0x%08lX", result);
-        if (SUCCEEDED(result)) {
-            RememberAppliedParams(params);
-            g_haveForwardedReset = true;
+        mode = ConvertNone;
+        effective = params;
+    }
+
+    if (SUCCEEDED(result)) {
+        RememberAppliedParams(effective);
+        g_haveForwardedReset = true;
+        if (mode != ConvertNone) {
+            AfterReset(device, effective, mode);
         }
     }
 
-    Log("Reset return: final result=0x%08lX", result);
+    Log("Reset return: final result=0x%08lX mode=%s", result, ConvertModeName(mode));
     return result;
 }
 
@@ -697,27 +716,32 @@ HRESULT WINAPI HookedCreateDevice(IDirect3D9* self,
         self, adapter, deviceType, focusWindow, behaviorFlags, params, device);
     LogPresentParams("CreateDevice input", params);
 
-    D3DPRESENT_PARAMETERS original = {};
-    ConvertMode mode = ConvertPresentParams(params, &original);
-    LogPresentParams("CreateDevice converted", params);
+    D3DPRESENT_PARAMETERS converted = {};
+    ConvertMode mode = ConvertPresentParams(params, &converted);
+    D3DPRESENT_PARAMETERS* effective = mode == ConvertNone ? params : &converted;
+    if (mode != ConvertNone) {
+        LogPresentParams("CreateDevice converted", &converted);
+    }
     Log("CreateDevice conversion mode=%s", ConvertModeName(mode));
 
     HRESULT result = g_originalCreateDevice(self, adapter, deviceType, focusWindow,
-                                            behaviorFlags, params, device);
+                                            behaviorFlags, effective, device);
     Log("CreateDevice original result=0x%08lX device=0x%p",
         result, device ? *device : nullptr);
 
-    if (mode != ConvertNone && FAILED(result) && RestorePresentParams(params, &original)) {
+    if (FAILED(result) && mode != ConvertNone) {
         LogPresentParams("CreateDevice fallback input", params);
         result = g_originalCreateDevice(self, adapter, deviceType, focusWindow,
                                         behaviorFlags, params, device);
         Log("CreateDevice fallback result=0x%08lX device=0x%p",
             result, device ? *device : nullptr);
+        mode = ConvertNone;
+        effective = params;
     }
 
     if (SUCCEEDED(result) && device && *device) {
-        RememberAppliedParams(params);
-        AfterCreateDevice(*device, params, focusWindow, mode);
+        RememberAppliedParams(effective);
+        AfterCreateDevice(*device, effective, focusWindow, mode);
     }
 
     Log("CreateDevice return: result=0x%08lX device=0x%p",
