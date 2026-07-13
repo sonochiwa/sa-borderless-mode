@@ -24,7 +24,7 @@ const wchar_t kDefaultIni[] =
     L"\xFEFF"
     L"[BorderlessMode]\r\n"
     L"AntiAFK=0\r\n"
-    L"Log=1\r\n";
+    L"Log=0\r\n";
 
 enum ConvertMode {
     ConvertNone = 0,
@@ -43,7 +43,7 @@ using ResetFn = HRESULT (WINAPI*)(IDirect3DDevice9* self,
 
 HMODULE g_module = nullptr;
 bool g_antiAfk = false;
-bool g_logEnabled = true;
+bool g_logEnabled = false;
 
 HANDLE g_logFile = INVALID_HANDLE_VALUE;
 CRITICAL_SECTION g_logLock;
@@ -265,7 +265,7 @@ void LoadConfig() {
     }
 
     g_antiAfk = antiAfk != 0;
-    g_logEnabled = GetPrivateProfileIntW(kIniSection, L"Log", 1, iniPath) != 0;
+    g_logEnabled = GetPrivateProfileIntW(kIniSection, L"Log", 0, iniPath) != 0;
 
     Log("config loaded: ini=%ls Log=%d AntiAFK=%d", iniPath,
         g_logEnabled ? 1 : 0, g_antiAfk ? 1 : 0);

@@ -41,13 +41,13 @@ Edit `BorderlessMode.ini` and restart the game.
 
 ```ini
 [BorderlessMode]
-Log=1
+Log=0
 AntiAFK=0
 ```
 
 | Key | Default | Meaning |
 | --- | ------- | ------- |
-| `Log` | `1` | `1` writes `BorderlessMode.log` next to the ASI for diagnostics. |
+| `Log` | `0` | `1` writes `BorderlessMode.log` next to the ASI for diagnostics. |
 | `AntiAFK` | `0` | `1` makes the game keep running while minimized or in the background. |
 
 The log is recreated on each game start. If the game hangs or shows a black
