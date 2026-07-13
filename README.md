@@ -52,8 +52,11 @@ The log is recreated on each game start. If the game hangs or shows a black
 screen, close the process and send `BorderlessMode.log` from the GTA SA folder.
 
 Anti-AFK rewrites focus-loss window messages such as `WM_ACTIVATE`,
-`WM_ACTIVATEAPP`, `WM_NCACTIVATE` and `WM_KILLFOCUS`. DirectInput still prevents
-keyboard input from leaking into the game while it is in the background.
+`WM_ACTIVATEAPP`, `WM_NCACTIVATE` and `WM_KILLFOCUS`. Because the game and
+SA:MP poll the global key state (`GetKeyState`, `GetAsyncKeyState`,
+`GetKeyboardState`) every frame, the plugin mutes those APIs whenever the
+foreground window belongs to another process, so typing in other windows no
+longer leaks into the game while it runs in the background.
 
 The default release config is stored in `Config\BorderlessMode.ini`.
 

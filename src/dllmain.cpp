@@ -1164,6 +1164,76 @@ void HookSetCursorPos() {
     }
 }
 
+using GetKeyStateFn = SHORT (WINAPI*)(int virtualKey);
+using GetAsyncKeyStateFn = SHORT (WINAPI*)(int virtualKey);
+using GetKeyboardStateFn = BOOL (WINAPI*)(PBYTE keyState);
+
+GetKeyStateFn g_originalGetKeyState = nullptr;
+GetAsyncKeyStateFn g_originalGetAsyncKeyState = nullptr;
+GetKeyboardStateFn g_originalGetKeyboardState = nullptr;
+
+// Windows delivers keyboard *messages* only to the focused window, but the
+// game and SA-MP also poll the global key state every frame. With AntiAFK
+// the game keeps simulating in the background, so typing in another window
+// makes the character jump and fire. Polled key state is muted while the
+// foreground window belongs to another process.
+bool ForegroundBelongsToGame() {
+    HWND foreground = GetForegroundWindow();
+    DWORD pid = 0;
+    if (foreground) {
+        GetWindowThreadProcessId(foreground, &pid);
+    }
+    LONG game = pid == GetCurrentProcessId() ? 1 : 0;
+
+    static LONG lastLogged = 1;
+    if (InterlockedExchange(&lastLogged, game) != game) {
+        Log("polled input %s: foreground=0x%p pid=%lu",
+            game ? "restored" : "muted", foreground, pid);
+    }
+    return game != 0;
+}
+
+SHORT WINAPI HookedGetKeyState(int virtualKey) {
+    if (!ForegroundBelongsToGame()) {
+        return 0;
+    }
+    return g_originalGetKeyState(virtualKey);
+}
+
+SHORT WINAPI HookedGetAsyncKeyState(int virtualKey) {
+    if (!ForegroundBelongsToGame()) {
+        return 0;
+    }
+    return g_originalGetAsyncKeyState(virtualKey);
+}
+
+BOOL WINAPI HookedGetKeyboardState(PBYTE keyState) {
+    BOOL result = g_originalGetKeyboardState(keyState);
+    if (result && keyState && !ForegroundBelongsToGame()) {
+        __try {
+            std::memset(keyState, 0, 256);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+    }
+    return result;
+}
+
+void HookKeyStateApis() {
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    if (!user32) {
+        return;
+    }
+    HookOneExport(user32, "GetKeyState",
+                  reinterpret_cast<void*>(&HookedGetKeyState),
+                  reinterpret_cast<void**>(&g_originalGetKeyState));
+    HookOneExport(user32, "GetAsyncKeyState",
+                  reinterpret_cast<void*>(&HookedGetAsyncKeyState),
+                  reinterpret_cast<void**>(&g_originalGetAsyncKeyState));
+    HookOneExport(user32, "GetKeyboardState",
+                  reinterpret_cast<void*>(&HookedGetKeyboardState),
+                  reinterpret_cast<void**>(&g_originalGetKeyboardState));
+}
+
 IDirect3D9* WINAPI HookedDirect3DCreate9(UINT sdkVersion) {
     Log("Direct3DCreate9 enter: sdk=%u", sdkVersion);
     IDirect3D9* d3d = g_originalDirect3DCreate9(sdkVersion);
@@ -1200,6 +1270,7 @@ DWORD WINAPI Initialize(LPVOID) {
 
     ApplyNoFrameDelay();
     HookSetCursorPos();
+    HookKeyStateApis();
     CaptureDesktopMode();
     HookChangeDisplaySettings();
 
