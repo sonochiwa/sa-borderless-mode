@@ -1,5 +1,7 @@
 #include <windows.h>
 #include <d3d9.h>
+#define DIRECTINPUT_VERSION 0x0800
+#include <dinput.h>
 #include <intrin.h>
 
 #include <cstdarg>
@@ -277,10 +279,96 @@ bool g_haveDesktopMode = false;
 // Defined next to the ChangeDisplaySettings hooks below.
 void RestoreDesktopMode(const char* reason);
 
+// Keys that are still physically held at the moment the game regains the
+// foreground (the TAB of an Alt+Tab released a moment after Alt, a mouse
+// button used to click the window, keys typed in another app) must not leak
+// in as fresh presses. Polled APIs and window messages each keep their own
+// mute table, because they observe the release at different times: queued
+// autorepeat WM_KEYDOWNs and the lagging GetKeyState table can still report
+// the key long after the physical (async) state says it was released.
+volatile LONG g_stickyMutedKeys[256] = {};  // polled key-state APIs
+volatile LONG g_msgMutedKeys[256] = {};     // window keyboard messages
+
+// TAB passes through with zero delay. In a real-world Alt+Tab the whole TAB
+// tap can land in the game before Alt even engages. Refocus must only mute
+// delayed/queued TAB state; injecting another TAB on restore can open the
+// SA-MP scoreboard after the original press was already hidden.
+volatile DWORD g_lastRealTabDownTick = 0;
+volatile LONG g_tabCompensatePending = 0;
+
+constexpr UINT_PTR kTabDeliveryTimerId = 0xB0DE1E55;
+constexpr DWORD kTabUndoWindowMs = 450;
+constexpr UINT kTabCompensateDelayMs = 300;
+constexpr UINT kTabSynthTapMs = 60;
+
+// 0 = idle, 1 = compensation scheduled, 2 = injected keydown out, keyup
+// pending.
+volatile LONG g_tabDeliveryPhase = 0;
+
+// The injected tap goes through SendInput so it reaches SA-MP's pump-level
+// hook naturally; while it is in flight the filters in this file must let
+// TAB through.
+volatile DWORD g_tabSynthStartTick = 0;
+
+bool TabSynthActive() {
+    DWORD start = g_tabSynthStartTick;
+    return start != 0 && (GetTickCount() - start) < 700;
+}
+
+void InjectTabEvent(bool up) {
+    INPUT input = {};
+    input.type = INPUT_KEYBOARD;
+    input.ki.wVk = VK_TAB;
+    input.ki.wScan = 0x0F;
+    input.ki.dwFlags = up ? KEYEVENTF_KEYUP : 0;
+    UINT sent = SendInput(1, &input, sizeof(input));
+    Log("TAB inject %s: sent=%u", up ? "keyup" : "keydown", sent);
+}
+
+// Defined next to the key-state hooks below.
+void MuteKeysHeldAtRefocus();
+bool TabRefocusGraceActive();
+void LogTabDownRead(const char* api, void* caller, bool suppressed);
+void InstallGetMessageHook(HWND window);
+
 const LONG kFrameStyleBits = WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX |
                              WS_MAXIMIZEBOX | WS_SYSMENU | WS_BORDER | WS_DLGFRAME;
 const LONG kFrameExStyleBits = WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE |
                                WS_EX_CLIENTEDGE | WS_EX_STATICEDGE;
+
+LRESULT ForwardToGame(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
+    if (!g_previousWndProc) {
+        return DefWindowProcW(window, message, wParam, lParam);
+    }
+    if (g_windowIsUnicode) {
+        return CallWindowProcW(g_previousWndProc, window, message, wParam, lParam);
+    }
+    return CallWindowProcA(g_previousWndProc, window, message, wParam, lParam);
+}
+
+void NoteFocusLossForTab(HWND window, const char* reason) {
+    LONG phase = InterlockedExchange(&g_tabDeliveryPhase, 0);
+    if (phase != 0) {
+        KillTimer(window, kTabDeliveryTimerId);
+        if (phase == 2) {
+            // The injected keydown already went out; close the pair so
+            // nothing is left with a stuck TAB.
+            InjectTabEvent(true);
+        }
+    }
+    InterlockedExchange(&g_tabCompensatePending, 0);
+    g_lastRealTabDownTick = 0;
+    Log("wnd focus lost (%s): TAB compensation cleared", reason);
+}
+
+void StartTabCompensationIfPending(HWND window) {
+    if (!InterlockedExchange(&g_tabCompensatePending, 0)) {
+        return;
+    }
+    InterlockedExchange(&g_tabDeliveryPhase, 1);
+    SetTimer(window, kTabDeliveryTimerId, kTabCompensateDelayMs, nullptr);
+    Log("wnd TAB undo timer started");
+}
 
 LRESULT CALLBACK GameWndProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
@@ -327,7 +415,112 @@ LRESULT CALLBACK GameWndProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
         case WM_SETFOCUS:
             // Avoid the vanilla restore-from-tray ESC menu.
             Log("wnd WM_SETFOCUS suppressed");
+            MuteKeysHeldAtRefocus();
+            StartTabCompensationIfPending(window);
             return 0;
+
+        case WM_ACTIVATE:
+            // Snapshot held keys as early as possible on focus gain, before
+            // the game or SA-MP polls or receives autorepeat messages.
+            if (LOWORD(wParam) != WA_INACTIVE) {
+                MuteKeysHeldAtRefocus();
+                StartTabCompensationIfPending(window);
+            } else {
+                NoteFocusLossForTab(window, "WM_ACTIVATE inactive");
+            }
+            break;
+
+        case WM_KILLFOCUS:
+            NoteFocusLossForTab(window, "WM_KILLFOCUS");
+            break;
+
+        case WM_TIMER:
+            if (wParam == kTabDeliveryTimerId) {
+                LONG phase = g_tabDeliveryPhase;
+                if (phase == 1) {
+                    Log("wnd TAB undo: injecting toggle");
+                    g_tabSynthStartTick = GetTickCount();
+                    InterlockedExchange(&g_tabDeliveryPhase, 2);
+                    InjectTabEvent(false);
+                    SetTimer(window, kTabDeliveryTimerId, kTabSynthTapMs, nullptr);
+                } else {
+                    KillTimer(window, kTabDeliveryTimerId);
+                    if (phase == 2) {
+                        InjectTabEvent(true);
+                    }
+                    InterlockedExchange(&g_tabDeliveryPhase, 0);
+                }
+                return 0;
+            }
+            break;
+
+        case WM_KEYDOWN:
+        case WM_SYSKEYDOWN:
+            if (wParam == VK_TAB) {
+                Log("wnd TAB keydown message=%u lParam=0x%08lX",
+                    message, static_cast<unsigned long>(lParam));
+                // Our own re-injected tap: hands off.
+                if (TabSynthActive()) {
+                    Log("wnd TAB keydown synth passthrough");
+                    break;
+                }
+                // The TAB press of Alt+Tab or Win+Tab; the system switches
+                // focus anyway, but SA-MP would toggle its scoreboard open
+                // before that happens.
+                if ((message == WM_SYSKEYDOWN && (HIWORD(lParam) & KF_ALTDOWN)) ||
+                    ((GetKeyState(VK_MENU) | GetKeyState(VK_LWIN) |
+                      GetKeyState(VK_RWIN)) & 0x8000)) {
+                    Log("wnd alt-tab TAB keydown suppressed message=%u", message);
+                    return 0;
+                }
+                if (TabRefocusGraceActive()) {
+                    Log("wnd TAB keydown suppressed by refocus grace");
+                    return 0;
+                }
+            }
+            // A keydown of a key still held from before the refocus (e.g.
+            // TAB released after Alt when tabbing back in) must not reach
+            // the game as a fresh press. Queued autorepeats can be processed
+            // after the physical release, so the mute lifts only on this
+            // window's own WM_KEYUP or on a keydown without the repeat bit
+            // (KF_REPEAT clear = genuinely new press).
+            if (g_msgMutedKeys[wParam & 0xFF]) {
+                if (HIWORD(lParam) & KF_REPEAT) {
+                    Log("wnd keydown suppressed for held key vk=0x%02X message=%u",
+                        static_cast<unsigned>(wParam), message);
+                    return 0;
+                }
+                InterlockedExchange(&g_msgMutedKeys[wParam & 0xFF], 0);
+            }
+            // A real TAB press goes straight through; remember when, so a
+            // focus loss right after it can schedule the undo tap.
+            if (wParam == VK_TAB) {
+                g_lastRealTabDownTick = GetTickCount();
+            }
+            break;
+
+        case WM_KEYUP:
+        case WM_SYSKEYUP:
+            if (wParam == VK_TAB) {
+                Log("wnd TAB keyup message=%u", message);
+                if (TabSynthActive()) {
+                    Log("wnd TAB keyup synth passthrough");
+                    break;
+                }
+                if (TabRefocusGraceActive()) {
+                    Log("wnd TAB keyup suppressed by refocus grace");
+                    return 0;
+                }
+            }
+            // The release of a muted key: the game never saw the press, so
+            // it must not see the release either.
+            if (g_msgMutedKeys[wParam & 0xFF]) {
+                InterlockedExchange(&g_msgMutedKeys[wParam & 0xFF], 0);
+                Log("wnd keyup swallowed for held key vk=0x%02X message=%u",
+                    static_cast<unsigned>(wParam), message);
+                return 0;
+            }
+            break;
 
         case WM_SETCURSOR:
             if (g_borderlessApplied &&
@@ -376,15 +569,7 @@ LRESULT CALLBACK GameWndProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
         }
     }
 
-    if (!g_previousWndProc) {
-        return DefWindowProcW(window, message, wParam, lParam);
-    }
-
-    if (g_windowIsUnicode) {
-        return CallWindowProcW(g_previousWndProc, window, message, wParam, lParam);
-    }
-
-    return CallWindowProcA(g_previousWndProc, window, message, wParam, lParam);
+    return ForwardToGame(window, message, wParam, lParam);
 }
 
 void InstallWindowHook(HWND window) {
@@ -637,6 +822,7 @@ void AfterCreateDevice(IDirect3DDevice9* device,
             device, window, focusWindow, ConvertModeName(mode));
         RequireNextReset("CreateDevice");
         InstallWindowHook(window);
+        InstallGetMessageHook(window);
         if (mode == ConvertFullscreen) {
             ApplyBorderlessStyle(window);
         }
@@ -1172,6 +1358,71 @@ GetKeyStateFn g_originalGetKeyState = nullptr;
 GetAsyncKeyStateFn g_originalGetAsyncKeyState = nullptr;
 GetKeyboardStateFn g_originalGetKeyboardState = nullptr;
 
+volatile DWORD g_lastRefocusTick = 0;
+
+// For a short window after the game regains focus, TAB reads as released on
+// every input path. Buffered/queued input (DirectInput event queues, lagging
+// key-state tables) can deliver the TAB of an Alt+Tab long after the key was
+// physically released, past every state-based mute.
+constexpr DWORD kTabRefocusGraceMs = 200;
+
+bool TabRefocusGraceActive() {
+    DWORD last = g_lastRefocusTick;
+    return last != 0 && (GetTickCount() - last) < kTabRefocusGraceMs;
+}
+
+void LogTabDownRead(const char* api, void* caller, bool suppressed) {
+    static volatile DWORD lastLogTick = 0;
+    DWORD now = GetTickCount();
+    DWORD last = lastLogTick;
+    if (last != 0 && now - last < 250) {
+        return;
+    }
+    lastLogTick = now;
+    char callerText[160] = {};
+    FormatCallerAddress(caller, callerText, sizeof(callerText));
+    Log("TAB down read via %s caller=%s%s", api, callerText,
+        suppressed ? " (suppressed)" : "");
+}
+
+void MuteKeysHeldAtRefocus() {
+    g_lastRefocusTick = GetTickCount();
+    if (!g_originalGetAsyncKeyState) {
+        return;
+    }
+    int muted = 0;
+    for (int key = 1; key < 256; ++key) {
+        if (g_originalGetAsyncKeyState(key) & 0x8000) {
+            InterlockedExchange(&g_stickyMutedKeys[key], 1);
+            InterlockedExchange(&g_msgMutedKeys[key], 1);
+            ++muted;
+        }
+    }
+    if (muted) {
+        Log("refocus: muted %d held key(s) until released", muted);
+    }
+}
+
+// Decides whether a polled read must present the key as released.
+// `reportedDown` is what the calling API itself sees for the key, so a
+// source whose state lags behind the physical release keeps muting until
+// it catches up. The flag is dropped once the async state agrees the key
+// is up.
+bool StickyMuteFilter(int virtualKey, bool reportedDown) {
+    unsigned index = static_cast<unsigned>(virtualKey) & 0xFF;
+    if (!g_stickyMutedKeys[index]) {
+        return false;
+    }
+    if (reportedDown) {
+        return true;
+    }
+    if (g_originalGetAsyncKeyState &&
+        !(g_originalGetAsyncKeyState(static_cast<int>(index)) & 0x8000)) {
+        InterlockedExchange(&g_stickyMutedKeys[index], 0);
+    }
+    return false;
+}
+
 // Windows delivers keyboard *messages* only to the focused window, but the
 // game and SA-MP also poll the global key state every frame. With AntiAFK
 // the game keeps simulating in the background, so typing in another window
@@ -1189,6 +1440,9 @@ bool ForegroundBelongsToGame() {
     if (InterlockedExchange(&lastLogged, game) != game) {
         Log("polled input %s: foreground=0x%p pid=%lu",
             game ? "restored" : "muted", foreground, pid);
+        if (game) {
+            MuteKeysHeldAtRefocus();
+        }
     }
     return game != 0;
 }
@@ -1197,21 +1451,79 @@ SHORT WINAPI HookedGetKeyState(int virtualKey) {
     if (!ForegroundBelongsToGame()) {
         return 0;
     }
-    return g_originalGetKeyState(virtualKey);
+    // Alt+Tab: the switcher takes the focus, but the game still glimpses the
+    // TAB press and SA-MP toggles its scoreboard open. Alt+TAB never reaches
+    // the game legitimately (the system always eats it), so TAB reads as
+    // released while Alt is held.
+    SHORT state = g_originalGetKeyState(virtualKey);
+    if (virtualKey == VK_TAB) {
+        bool altOrWin = ((g_originalGetKeyState(VK_MENU) |
+                          g_originalGetKeyState(VK_LWIN) |
+                          g_originalGetKeyState(VK_RWIN)) & 0x8000) != 0;
+        bool suppress = !TabSynthActive() &&
+                        (altOrWin || TabRefocusGraceActive());
+        if (state & 0x8000) {
+            LogTabDownRead("GetKeyState", _ReturnAddress(), suppress);
+        }
+        if (suppress) {
+            return 0;
+        }
+    }
+    if (StickyMuteFilter(virtualKey, (state & 0x8000) != 0)) {
+        return 0;
+    }
+    return state;
 }
 
 SHORT WINAPI HookedGetAsyncKeyState(int virtualKey) {
     if (!ForegroundBelongsToGame()) {
         return 0;
     }
-    return g_originalGetAsyncKeyState(virtualKey);
+    SHORT state = g_originalGetAsyncKeyState(virtualKey);
+    if (virtualKey == VK_TAB) {
+        bool altOrWin = ((g_originalGetAsyncKeyState(VK_MENU) |
+                          g_originalGetAsyncKeyState(VK_LWIN) |
+                          g_originalGetAsyncKeyState(VK_RWIN)) & 0x8000) != 0;
+        bool suppress = !TabSynthActive() &&
+                        (altOrWin || TabRefocusGraceActive());
+        if (state & 0x8000) {
+            LogTabDownRead("GetAsyncKeyState", _ReturnAddress(), suppress);
+        }
+        if (suppress) {
+            return 0;
+        }
+    }
+    if (StickyMuteFilter(virtualKey, (state & 0x8000) != 0)) {
+        return 0;
+    }
+    return state;
 }
 
 BOOL WINAPI HookedGetKeyboardState(PBYTE keyState) {
     BOOL result = g_originalGetKeyboardState(keyState);
-    if (result && keyState && !ForegroundBelongsToGame()) {
+    if (result && keyState) {
         __try {
-            std::memset(keyState, 0, 256);
+            if (!ForegroundBelongsToGame()) {
+                std::memset(keyState, 0, 256);
+            } else {
+                if (keyState[VK_TAB] & 0x80) {
+                    bool altOrWin = ((keyState[VK_MENU] | keyState[VK_LMENU] |
+                                      keyState[VK_RMENU] | keyState[VK_LWIN] |
+                                      keyState[VK_RWIN]) & 0x80) != 0;
+                    bool suppress = !TabSynthActive() &&
+                                    (altOrWin || TabRefocusGraceActive());
+                    LogTabDownRead("GetKeyboardState", _ReturnAddress(), suppress);
+                    if (suppress) {
+                        keyState[VK_TAB] = 0;
+                    }
+                }
+                for (int key = 1; key < 256; ++key) {
+                    if (g_stickyMutedKeys[key] &&
+                        StickyMuteFilter(key, (keyState[key] & 0x80) != 0)) {
+                        keyState[key] &= 0x7F;
+                    }
+                }
+            }
         } __except (EXCEPTION_EXECUTE_HANDLER) {
         }
     }
@@ -1232,6 +1544,372 @@ void HookKeyStateApis() {
     HookOneExport(user32, "GetKeyboardState",
                   reinterpret_cast<void*>(&HookedGetKeyboardState),
                   reinterpret_cast<void**>(&g_originalGetKeyboardState));
+}
+
+// --- Message-queue TAB filter -----------------------------------------------
+// SA-MP reads keyboard messages at pump level, before window-procedure
+// dispatch, so WndProc-side suppression never reaches it. The queue itself
+// is filtered instead: TAB messages that policy says to hide are rewritten
+// to WM_NULL right where they are retrieved. Loaded-before-SA-MP hook
+// ordering puts this filter between the real queue and SA-MP's reader for
+// both an IAT hook and a later inline hook; a WH_GETMESSAGE hook installed
+// after SA-MP's covers that route as well.
+
+using PeekMessageTFn = BOOL (WINAPI*)(LPMSG msg, HWND window, UINT filterMin,
+                                      UINT filterMax, UINT removeFlags);
+using GetMessageTFn = BOOL (WINAPI*)(LPMSG msg, HWND window, UINT filterMin,
+                                     UINT filterMax);
+
+PeekMessageTFn g_originalPeekMessageA = nullptr;
+PeekMessageTFn g_originalPeekMessageW = nullptr;
+GetMessageTFn g_originalGetMessageA = nullptr;
+GetMessageTFn g_originalGetMessageW = nullptr;
+HHOOK g_getMessageHook = nullptr;
+
+void FilterQueuedTabMessage(MSG* msg) {
+    __try {
+        if (!msg || msg->wParam != VK_TAB) {
+            return;
+        }
+        bool down = msg->message == WM_KEYDOWN || msg->message == WM_SYSKEYDOWN;
+        bool up = msg->message == WM_KEYUP || msg->message == WM_SYSKEYUP;
+        if (!down && !up) {
+            return;
+        }
+        if (TabSynthActive()) {
+            return;
+        }
+        bool altOrWin = g_originalGetAsyncKeyState &&
+                        ((g_originalGetAsyncKeyState(VK_MENU) |
+                          g_originalGetAsyncKeyState(VK_LWIN) |
+                          g_originalGetAsyncKeyState(VK_RWIN)) & 0x8000);
+        if (altOrWin || TabRefocusGraceActive()) {
+            Log("pump TAB %s neutralized (%s)", down ? "keydown" : "keyup",
+                altOrWin ? "alt/win" : "grace");
+            msg->message = WM_NULL;
+            return;
+        }
+        if (down && !(HIWORD(msg->lParam) & KF_REPEAT)) {
+            // This press WILL be seen by SA-MP; remember it so a focus loss
+            // right after can schedule the undo tap.
+            g_lastRealTabDownTick = GetTickCount();
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+BOOL WINAPI HookedPeekMessageA(LPMSG msg, HWND window, UINT filterMin,
+                               UINT filterMax, UINT removeFlags) {
+    BOOL result = g_originalPeekMessageA(msg, window, filterMin, filterMax,
+                                         removeFlags);
+    if (result) {
+        FilterQueuedTabMessage(msg);
+    }
+    return result;
+}
+
+BOOL WINAPI HookedPeekMessageW(LPMSG msg, HWND window, UINT filterMin,
+                               UINT filterMax, UINT removeFlags) {
+    BOOL result = g_originalPeekMessageW(msg, window, filterMin, filterMax,
+                                         removeFlags);
+    if (result) {
+        FilterQueuedTabMessage(msg);
+    }
+    return result;
+}
+
+BOOL WINAPI HookedGetMessageA(LPMSG msg, HWND window, UINT filterMin,
+                              UINT filterMax) {
+    BOOL result = g_originalGetMessageA(msg, window, filterMin, filterMax);
+    if (result != 0 && result != -1) {
+        FilterQueuedTabMessage(msg);
+    }
+    return result;
+}
+
+BOOL WINAPI HookedGetMessageW(LPMSG msg, HWND window, UINT filterMin,
+                              UINT filterMax) {
+    BOOL result = g_originalGetMessageW(msg, window, filterMin, filterMax);
+    if (result != 0 && result != -1) {
+        FilterQueuedTabMessage(msg);
+    }
+    return result;
+}
+
+LRESULT CALLBACK GetMsgHookProc(int code, WPARAM wParam, LPARAM lParam) {
+    if (code == HC_ACTION && lParam) {
+        FilterQueuedTabMessage(reinterpret_cast<MSG*>(lParam));
+    }
+    return CallNextHookEx(nullptr, code, wParam, lParam);
+}
+
+void HookMessagePump() {
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    if (!user32) {
+        return;
+    }
+    HookOneExport(user32, "PeekMessageA",
+                  reinterpret_cast<void*>(&HookedPeekMessageA),
+                  reinterpret_cast<void**>(&g_originalPeekMessageA));
+    HookOneExport(user32, "PeekMessageW",
+                  reinterpret_cast<void*>(&HookedPeekMessageW),
+                  reinterpret_cast<void**>(&g_originalPeekMessageW));
+    HookOneExport(user32, "GetMessageA",
+                  reinterpret_cast<void*>(&HookedGetMessageA),
+                  reinterpret_cast<void**>(&g_originalGetMessageA));
+    HookOneExport(user32, "GetMessageW",
+                  reinterpret_cast<void*>(&HookedGetMessageW),
+                  reinterpret_cast<void**>(&g_originalGetMessageW));
+}
+
+// Installed once the game window is known (after SA-MP set its hooks, so
+// this one runs first in the WH_GETMESSAGE chain and neutralizes TAB before
+// SA-MP's hook sees it).
+void InstallGetMessageHook(HWND window) {
+    if (g_getMessageHook || !window || !IsWindow(window)) {
+        return;
+    }
+    DWORD threadId = GetWindowThreadProcessId(window, nullptr);
+    g_getMessageHook = SetWindowsHookExW(WH_GETMESSAGE, &GetMsgHookProc,
+                                         g_module, threadId);
+    Log("WH_GETMESSAGE hook: hook=0x%p thread=%lu error=%lu",
+        g_getMessageHook, threadId,
+        g_getMessageHook ? 0 : GetLastError());
+}
+
+// --- DirectInput keyboard -------------------------------------------------
+// SA-MP reads the keyboard through DirectInput as well; that path bypasses
+// every user32 hook above. The buffered event queue can also hand out the
+// TAB press of an Alt+Tab after the focus already returned to the game.
+
+using DirectInput8CreateFn = HRESULT (WINAPI*)(HINSTANCE instance, DWORD version,
+                                               REFIID iid, LPVOID* out,
+                                               LPUNKNOWN outer);
+using DICreateDeviceFn = HRESULT (WINAPI*)(void* self, REFGUID rguid,
+                                           void** device, LPUNKNOWN outer);
+using DIGetDeviceStateFn = HRESULT (WINAPI*)(void* self, DWORD size, LPVOID data);
+using DIGetDeviceDataFn = HRESULT (WINAPI*)(void* self, DWORD objectSize,
+                                            DIDEVICEOBJECTDATA* entries,
+                                            DWORD* count, DWORD flags);
+
+DirectInput8CreateFn g_originalDirectInput8Create = nullptr;
+DICreateDeviceFn g_originalDICreateDevice = nullptr;
+DIGetDeviceStateFn g_originalDIGetDeviceState = nullptr;
+DIGetDeviceDataFn g_originalDIGetDeviceData = nullptr;
+void* g_diCreateDeviceTarget = nullptr;
+void* g_diGetDeviceStateTarget = nullptr;
+void* g_diGetDeviceDataTarget = nullptr;
+
+// GUID_SysKeyboard, spelled out to avoid linking dxguid.lib.
+const GUID kGuidSysKeyboard =
+    {0x6F1D2B61, 0xD5A0, 0x11CF, {0xBF, 0xC7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00}};
+
+constexpr DWORD kDikTab = 0x0F;
+constexpr DWORD kDikLAlt = 0x38;
+constexpr DWORD kDikRAlt = 0xB8;
+constexpr int kMaxDiKeyboards = 8;
+
+void* g_diKeyboards[kMaxDiKeyboards] = {};
+LONG g_diKeyboardCount = 0;
+
+bool IsDiKeyboard(void* device) {
+    LONG count = g_diKeyboardCount;
+    if (count > kMaxDiKeyboards) {
+        count = kMaxDiKeyboards;
+    }
+    for (LONG i = 0; i < count; ++i) {
+        if (g_diKeyboards[i] == device) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void RememberDiKeyboard(void* device) {
+    if (!device || IsDiKeyboard(device)) {
+        return;
+    }
+    LONG index = InterlockedIncrement(&g_diKeyboardCount) - 1;
+    if (index < kMaxDiKeyboards) {
+        g_diKeyboards[index] = device;
+        Log("DI keyboard device remembered: device=0x%p index=%ld", device, index);
+    }
+}
+
+HRESULT WINAPI HookedDIGetDeviceState(void* self, DWORD size, LPVOID data) {
+    HRESULT result = g_originalDIGetDeviceState(self, size, data);
+    if (FAILED(result) || !data || !IsDiKeyboard(self)) {
+        return result;
+    }
+    __try {
+        BYTE* keys = static_cast<BYTE*>(data);
+        if (!ForegroundBelongsToGame()) {
+            std::memset(data, 0, size);
+        } else if (size > kDikTab && (keys[kDikTab] & 0x80)) {
+            bool altDown = (size > kDikRAlt) &&
+                           ((keys[kDikLAlt] | keys[kDikRAlt]) & 0x80);
+            bool suppress = altDown || TabRefocusGraceActive();
+            LogTabDownRead("DI GetDeviceState", _ReturnAddress(), suppress);
+            if (suppress) {
+                keys[kDikTab] = 0;
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return result;
+}
+
+HRESULT WINAPI HookedDIGetDeviceData(void* self, DWORD objectSize,
+                                     DIDEVICEOBJECTDATA* entries,
+                                     DWORD* count, DWORD flags) {
+    HRESULT result = g_originalDIGetDeviceData(self, objectSize, entries,
+                                               count, flags);
+    if (FAILED(result) || !count || !IsDiKeyboard(self)) {
+        return result;
+    }
+    __try {
+        if (!ForegroundBelongsToGame()) {
+            *count = 0;
+            return result;
+        }
+        if (entries && objectSize >= sizeof(DWORD) * 2) {
+            BYTE* base = reinterpret_cast<BYTE*>(entries);
+            DWORD total = *count;
+            DWORD kept = 0;
+            for (DWORD i = 0; i < total; ++i) {
+                BYTE* entry = base + i * objectSize;
+                DWORD offset = *reinterpret_cast<DWORD*>(entry);
+                if (offset == kDikTab && TabRefocusGraceActive()) {
+                    LogTabDownRead("DI GetDeviceData", _ReturnAddress(), true);
+                    continue;
+                }
+                if (kept != i) {
+                    std::memmove(base + kept * objectSize, entry, objectSize);
+                }
+                ++kept;
+            }
+            *count = kept;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return result;
+}
+
+void HookDiDeviceMethods(void* device) {
+    __try {
+        void** vtable = *reinterpret_cast<void***>(device);
+
+        void* stateTarget = vtable[9];   // IDirectInputDevice8::GetDeviceState
+        if (!g_diGetDeviceStateTarget) {
+            MH_STATUS create = MH_CreateHook(
+                stateTarget, reinterpret_cast<void*>(&HookedDIGetDeviceState),
+                reinterpret_cast<void**>(&g_originalDIGetDeviceState));
+            MH_STATUS enable = create == MH_OK ? MH_EnableHook(stateTarget) : create;
+            Log("DI GetDeviceState hook: target=0x%p create=%d enable=%d",
+                stateTarget, create, enable);
+            if (create == MH_OK && enable == MH_OK) {
+                g_diGetDeviceStateTarget = stateTarget;
+            } else {
+                g_originalDIGetDeviceState = nullptr;
+            }
+        } else if (g_diGetDeviceStateTarget != stateTarget) {
+            Log("DI GetDeviceState second vtable ignored: target=0x%p", stateTarget);
+        }
+
+        void* dataTarget = vtable[10];   // IDirectInputDevice8::GetDeviceData
+        if (!g_diGetDeviceDataTarget) {
+            MH_STATUS create = MH_CreateHook(
+                dataTarget, reinterpret_cast<void*>(&HookedDIGetDeviceData),
+                reinterpret_cast<void**>(&g_originalDIGetDeviceData));
+            MH_STATUS enable = create == MH_OK ? MH_EnableHook(dataTarget) : create;
+            Log("DI GetDeviceData hook: target=0x%p create=%d enable=%d",
+                dataTarget, create, enable);
+            if (create == MH_OK && enable == MH_OK) {
+                g_diGetDeviceDataTarget = dataTarget;
+            } else {
+                g_originalDIGetDeviceData = nullptr;
+            }
+        } else if (g_diGetDeviceDataTarget != dataTarget) {
+            Log("DI GetDeviceData second vtable ignored: target=0x%p", dataTarget);
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Log("DI device hook failed with exception");
+    }
+}
+
+HRESULT WINAPI HookedDICreateDevice(void* self, REFGUID rguid,
+                                    void** device, LPUNKNOWN outer) {
+    HRESULT result = g_originalDICreateDevice(self, rguid, device, outer);
+    __try {
+        bool keyboard = std::memcmp(&rguid, &kGuidSysKeyboard, sizeof(GUID)) == 0;
+        char callerText[160] = {};
+        FormatCallerAddress(_ReturnAddress(), callerText, sizeof(callerText));
+        Log("DI CreateDevice: result=0x%08lX keyboard=%d device=0x%p caller=%s",
+            result, keyboard ? 1 : 0,
+            device ? *device : nullptr, callerText);
+        if (SUCCEEDED(result) && keyboard && device && *device) {
+            RememberDiKeyboard(*device);
+            HookDiDeviceMethods(*device);
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Log("DI CreateDevice post-processing failed with exception");
+    }
+    return result;
+}
+
+HRESULT WINAPI HookedDirectInput8Create(HINSTANCE instance, DWORD version,
+                                        REFIID iid, LPVOID* out,
+                                        LPUNKNOWN outer) {
+    HRESULT result = g_originalDirectInput8Create(instance, version, iid, out, outer);
+    __try {
+        Log("DirectInput8Create: result=0x%08lX interface=0x%p",
+            result, out ? *out : nullptr);
+        if (SUCCEEDED(result) && out && *out) {
+            void** vtable = *reinterpret_cast<void***>(*out);
+            void* target = vtable[3];   // IDirectInput8::CreateDevice
+            if (!g_diCreateDeviceTarget) {
+                MH_STATUS create = MH_CreateHook(
+                    target, reinterpret_cast<void*>(&HookedDICreateDevice),
+                    reinterpret_cast<void**>(&g_originalDICreateDevice));
+                MH_STATUS enable = create == MH_OK ? MH_EnableHook(target) : create;
+                Log("DI CreateDevice hook: target=0x%p create=%d enable=%d",
+                    target, create, enable);
+                if (create == MH_OK && enable == MH_OK) {
+                    g_diCreateDeviceTarget = target;
+                } else {
+                    g_originalDICreateDevice = nullptr;
+                }
+            } else if (g_diCreateDeviceTarget != target) {
+                Log("DI CreateDevice second vtable ignored: target=0x%p", target);
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Log("DirectInput8Create post-processing failed with exception");
+    }
+    return result;
+}
+
+void HookDirectInput() {
+    HMODULE dinput8 = LoadLibraryW(L"dinput8.dll");
+    if (!dinput8) {
+        Log("dinput8 LoadLibrary failed: error=%lu", GetLastError());
+        return;
+    }
+    void* target = reinterpret_cast<void*>(
+        GetProcAddress(dinput8, "DirectInput8Create"));
+    if (!target) {
+        Log("DirectInput8Create export not found");
+        return;
+    }
+    MH_STATUS create = MH_CreateHook(
+        target, reinterpret_cast<void*>(&HookedDirectInput8Create),
+        reinterpret_cast<void**>(&g_originalDirectInput8Create));
+    MH_STATUS enable = create == MH_OK ? MH_EnableHook(target) : create;
+    Log("DirectInput8Create hook: target=0x%p create=%d enable=%d",
+        target, create, enable);
+    if (create != MH_OK || enable != MH_OK) {
+        g_originalDirectInput8Create = nullptr;
+    }
 }
 
 IDirect3D9* WINAPI HookedDirect3DCreate9(UINT sdkVersion) {
@@ -1269,8 +1947,6 @@ DWORD WINAPI Initialize(LPVOID) {
     Log("MinHook initialized: status=%d", status);
 
     ApplyNoFrameDelay();
-    HookSetCursorPos();
-    HookKeyStateApis();
     CaptureDesktopMode();
     HookChangeDisplaySettings();
 
@@ -1297,11 +1973,17 @@ DWORD WINAPI Initialize(LPVOID) {
         : create;
     Log("Direct3DCreate9 hook: create=%d enable=%d original=0x%p",
         create, enable, reinterpret_cast<void*>(g_originalDirect3DCreate9));
+    TryHookCreateDeviceThroughTemporaryObject(createD3D9);
     if (create == MH_OK && enable == MH_OK) {
+        HookSetCursorPos();
+        HookKeyStateApis();
+        HookMessagePump();
         return 0;
     }
 
-    TryHookCreateDeviceThroughTemporaryObject(createD3D9);
+    HookSetCursorPos();
+    HookKeyStateApis();
+    HookMessagePump();
     return 0;
 }
 
@@ -1310,6 +1992,10 @@ DWORD WINAPI Initialize(LPVOID) {
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_DETACH) {
         Log("process detach");
+        if (g_getMessageHook) {
+            UnhookWindowsHookEx(g_getMessageHook);
+            g_getMessageHook = nullptr;
+        }
         LogClose();
         if (g_logLockInitialized) {
             DeleteCriticalSection(&g_logLock);

@@ -14,6 +14,8 @@ Windows SDK, and MinHook sources vendored in `vendor\minhook`.
   `IDirect3DDevice9::Reset`.
 - Leaves already-windowed setups alone and only removes the vsync wait.
 - Optionally keeps the game active in the background with `AntiAFK=1`.
+- Hides the TAB press of Alt+Tab from the game, so the SA:MP scoreboard no
+  longer gets stuck open after switching back.
 
 No GTA SA executable addresses are used. The plugin hooks D3D9, so it is meant
 to work with GTA SA 1.0, 1.01, Steam builds, SA:MP, overlays and D3D9 wrappers.
