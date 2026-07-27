@@ -1012,7 +1012,7 @@ void DrawFpsOverlay(IDirect3DDevice9* device, unsigned fps) {
     }
 
     char text[24] = {};
-    std::snprintf(text, sizeof(text), "FPS %u", fps);
+    std::snprintf(text, sizeof(text), "%u", fps);
 
     constexpr LONG scale = 3;
     constexpr LONG glyphAdvance = 6 * scale;
