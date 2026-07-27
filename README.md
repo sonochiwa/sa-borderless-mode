@@ -10,15 +10,23 @@ Windows SDK, and MinHook sources vendored in `vendor\minhook`.
 
 - Converts exclusive fullscreen D3D9 presentation to borderless windowed mode.
 - Removes the vsync wait by forcing `D3DPRESENT_INTERVAL_IMMEDIATE`.
+- Keeps GTA's refresh-rate value synchronized with the current desktop mode
+  when video settings are applied.
+- Preserves the NoFrameDelay patch across D3D device resets and supports
+  selecting 16-bit video modes.
 - Keeps working after alt-tab and in-game video setting changes by also handling
   `IDirect3DDevice9::Reset`.
 - Leaves already-windowed setups alone and only removes the vsync wait.
+- Press **F11** to show or hide the real D3D presentation rate in-game.
+- Blocks **Alt+Enter** so the game cannot accidentally leave borderless mode.
 - Optionally keeps the game active in the background with `AntiAFK=1`.
 - Hides the TAB press of Alt+Tab from the game, so the SA:MP scoreboard no
   longer gets stuck open after switching back.
 
-No GTA SA executable addresses are used. The plugin hooks D3D9, so it is meant
-to work with GTA SA 1.0, 1.01, Steam builds, SA:MP, overlays and D3D9 wrappers.
+The core borderless D3D9 hooks do not depend on a specific GTA executable.
+The integrated RefreshRateFix and NoFrameDelay features use GTA SA 1.0 US
+addresses and verify the expected code signatures before patching. On an
+unknown executable, those address-dependent patches are skipped safely.
 
 ## Installation
 
@@ -40,18 +48,38 @@ If `BorderlessMode.ini` is missing, the plugin creates it next to
 Edit `BorderlessMode.ini` and restart the game.
 
 ```ini
-[BorderlessMode]
-Log=0
-AntiAFK=0
+# BorderlessMode v1.3.0
+# Created by sonochiwa
+# Source code: https://github.com/sonochiwa/sa-borderless-mode
+# Default FPS toggle hotkey: F11
+
+[general]
+antiAFK=0
+log=0
+
+[fpsCounter]
+show=0
+hotkeyEnabled=1
+hotkeyModifier=0
+hotkeyKey=122
 ```
 
-| Key | Default | Meaning |
-| --- | ------- | ------- |
-| `Log` | `0` | `1` writes `BorderlessMode.log` next to the ASI for diagnostics. |
-| `AntiAFK` | `0` | `1` makes the game keep running while minimized or in the background. |
+| Section | Key | Default | Meaning |
+| ------- | --- | ------- | ------- |
+| `general` | `antiAFK` | `0` | `1` makes the game keep running while minimized or in the background. |
+| `general` | `log` | `0` | `1` writes `BorderlessMode.log` next to the ASI for diagnostics. |
+| `fpsCounter` | `show` | `0` | Shows the real D3D presentation rate. Its value is saved whenever the counter is toggled in game. |
+| `fpsCounter` | `hotkeyEnabled` | `1` | Enables hotkey handling. Set to `0` to disable it without removing the key. |
+| `fpsCounter` | `hotkeyModifier` | `0` | Optional modifier as a decimal Win32 virtual-key code. `0` means no modifier. |
+| `fpsCounter` | `hotkeyKey` | `122` | Main key as a decimal Win32 virtual-key code (`122` is F11). Removing the key or setting it to `0` disables hotkey handling. |
+
+For example, use `hotkeyModifier=18` and `hotkeyKey=89` for **Alt + Y**.
+The main key is intercepted only while the configured modifier is held.
 
 The log is recreated on each game start. If the game hangs or shows a black
 screen, close the process and send `BorderlessMode.log` from the GTA SA folder.
+
+Legacy `[BorderlessMode]` and `[SABorderless]` configurations remain supported.
 
 Anti-AFK rewrites focus-loss window messages such as `WM_ACTIVATE`,
 `WM_ACTIVATEAPP`, `WM_NCACTIVATE` and `WM_KILLFOCUS`. Because the game and
@@ -81,7 +109,7 @@ build\BorderlessMode.asi
 The local release archive is:
 
 ```text
-build\BorderlessMode-v1.1.0.zip
+build\BorderlessMode-v1.3.0.zip
 ```
 
 `build\` is generated output and is intentionally ignored by git.

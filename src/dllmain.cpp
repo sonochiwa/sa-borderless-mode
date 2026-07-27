@@ -1,7 +1,5 @@
 #include <windows.h>
 #include <d3d9.h>
-#define DIRECTINPUT_VERSION 0x0800
-#include <dinput.h>
 #include <intrin.h>
 
 #include <cstdarg>
@@ -14,17 +12,31 @@ namespace {
 
 constexpr int kVtableCreateDevice = 16;
 constexpr int kVtableReset = 16;
+constexpr int kVtablePresent = 17;
 
-const wchar_t kIniSection[] = L"BorderlessMode";
-const wchar_t kLegacyIniSection[] = L"SABorderless";
+const wchar_t kGeneralIniSection[] = L"general";
+const wchar_t kFpsCounterIniSection[] = L"fpsCounter";
+const wchar_t kLegacyIniSection[] = L"BorderlessMode";
+const wchar_t kOlderLegacyIniSection[] = L"SABorderless";
 
 // UTF-16 LE with BOM: the profile APIs read it natively, and text editors
 // stop misdetecting the short file as UTF-16 mojibake ("Chinese" text).
 const wchar_t kDefaultIni[] =
     L"\xFEFF"
-    L"[BorderlessMode]\r\n"
-    L"AntiAFK=0\r\n"
-    L"Log=0\r\n";
+    L"# BorderlessMode v1.3.0\r\n"
+    L"# Created by sonochiwa\r\n"
+    L"# Source code: https://github.com/sonochiwa/sa-borderless-mode\r\n"
+    L"# Default FPS toggle hotkey: F11\r\n"
+    L"\r\n"
+    L"[general]\r\n"
+    L"antiAFK=0\r\n"
+    L"log=0\r\n"
+    L"\r\n"
+    L"[fpsCounter]\r\n"
+    L"show=0\r\n"
+    L"hotkeyEnabled=1\r\n"
+    L"hotkeyModifier=0\r\n"
+    L"hotkeyKey=122\r\n";
 
 enum ConvertMode {
     ConvertNone = 0,
@@ -40,10 +52,21 @@ using CreateDeviceFn = HRESULT (WINAPI*)(IDirect3D9* self, UINT adapter,
                                          IDirect3DDevice9** device);
 using ResetFn = HRESULT (WINAPI*)(IDirect3DDevice9* self,
                                   D3DPRESENT_PARAMETERS* params);
+using PresentFn = HRESULT (WINAPI*)(IDirect3DDevice9* self,
+                                    const RECT* sourceRect,
+                                    const RECT* destRect,
+                                    HWND destWindowOverride,
+                                    const RGNDATA* dirtyRegion);
+using ApplyVideoModeFn = int (__cdecl*)(void* arg1, void* arg2, void* arg3);
 
 HMODULE g_module = nullptr;
 bool g_antiAfk = false;
 bool g_logEnabled = false;
+volatile LONG g_showFpsOverlay = 0;
+bool g_fpsHotkeyEnabled = true;
+UINT g_fpsHotkeyModifier = 0;
+UINT g_fpsHotkeyKey = 0;
+volatile LONG g_fpsHotkeyPressConsumed = 0;
 
 HANDLE g_logFile = INVALID_HANDLE_VALUE;
 CRITICAL_SECTION g_logLock;
@@ -174,6 +197,8 @@ using SetCursorPosFn = BOOL (WINAPI*)(int x, int y);
 Direct3DCreate9Fn g_originalDirect3DCreate9 = nullptr;
 CreateDeviceFn g_originalCreateDevice = nullptr;
 ResetFn g_originalReset = nullptr;
+PresentFn g_originalPresent = nullptr;
+ApplyVideoModeFn g_originalApplyVideoMode = nullptr;
 SetCursorPosFn g_originalSetCursorPos = nullptr;
 
 LONG g_createDeviceHookState = 0;
@@ -251,6 +276,90 @@ void CreateDefaultIniIfMissing(const wchar_t* path) {
     CloseHandle(file);
 }
 
+UINT ParseVirtualKey(const wchar_t* value, UINT fallback) {
+    if (!value || !*value) {
+        return fallback;
+    }
+
+    if ((value[0] == L'F' || value[0] == L'f') && value[1]) {
+        wchar_t* end = nullptr;
+        unsigned long functionNumber = wcstoul(value + 1, &end, 10);
+        if (end && *end == L'\0' &&
+            functionNumber >= 1 && functionNumber <= 24) {
+            return VK_F1 + static_cast<UINT>(functionNumber - 1);
+        }
+    }
+
+    wchar_t* end = nullptr;
+    unsigned long numeric = wcstoul(value, &end, 0);
+    if (end && *end == L'\0' && numeric >= 1 && numeric <= 0xFF) {
+        return static_cast<UINT>(numeric);
+    }
+
+    return fallback;
+}
+
+int ReadIntSetting(const wchar_t* path, const wchar_t* section,
+                   const wchar_t* key, const wchar_t* legacyKey,
+                   int fallback) {
+    int value = GetPrivateProfileIntW(section, key, -1, path);
+    if (value >= 0) {
+        return value;
+    }
+
+    value = GetPrivateProfileIntW(kLegacyIniSection, legacyKey, -1, path);
+    if (value >= 0) {
+        return value;
+    }
+
+    return GetPrivateProfileIntW(kOlderLegacyIniSection, legacyKey, fallback,
+                                 path);
+}
+
+void ReadFpsHotkeyKey(const wchar_t* path, wchar_t* value, DWORD valueSize) {
+    wchar_t sectionValues[64] = {};
+    bool hasFpsCounterSection =
+        GetPrivateProfileSectionW(kFpsCounterIniSection, sectionValues,
+                                  static_cast<DWORD>(
+                                      sizeof(sectionValues) /
+                                      sizeof(sectionValues[0])),
+                                  path) != 0;
+    if (hasFpsCounterSection) {
+        if (GetPrivateProfileStringW(kFpsCounterIniSection, L"hotkeyKey", L"",
+                                     value, valueSize, path) != 0) {
+            return;
+        }
+        // v1.3 development builds used this key in the new section.
+        if (GetPrivateProfileStringW(kFpsCounterIniSection, L"toggleKey", L"",
+                                     value, valueSize, path) != 0) {
+            return;
+        }
+        // The new section is authoritative: a missing key disables the hotkey
+        // even if stale legacy sections are still present in the file.
+        value[0] = L'\0';
+        return;
+    }
+
+    if (GetPrivateProfileStringW(kLegacyIniSection, L"FpsToggleKey", L"",
+                                 value, valueSize, path) != 0) {
+        return;
+    }
+    if (GetPrivateProfileStringW(kOlderLegacyIniSection, L"FpsToggleKey", L"",
+                                 value, valueSize, path) != 0) {
+        return;
+    }
+    value[0] = L'\0';
+}
+
+bool HasIniSetting(const wchar_t* path, const wchar_t* section,
+                   const wchar_t* key) {
+    wchar_t value[2] = {};
+    return GetPrivateProfileStringW(section, key, L"", value,
+                                    static_cast<DWORD>(
+                                        sizeof(value) / sizeof(value[0])),
+                                    path) != 0;
+}
+
 void LoadConfig() {
     wchar_t iniPath[MAX_PATH] = {};
     if (!BuildIniPath(iniPath, MAX_PATH)) {
@@ -259,16 +368,60 @@ void LoadConfig() {
 
     CreateDefaultIniIfMissing(iniPath);
 
-    int antiAfk = GetPrivateProfileIntW(kIniSection, L"AntiAFK", -1, iniPath);
-    if (antiAfk < 0) {
-        antiAfk = GetPrivateProfileIntW(kLegacyIniSection, L"AntiAFK", 0, iniPath);
+    g_antiAfk =
+        ReadIntSetting(iniPath, kGeneralIniSection, L"antiAFK", L"AntiAFK", 0) !=
+        0;
+    InterlockedExchange(
+        &g_showFpsOverlay,
+        ReadIntSetting(iniPath, kFpsCounterIniSection, L"show", L"ShowFPS", 0) !=
+            0);
+    g_fpsHotkeyEnabled =
+        ReadIntSetting(iniPath, kFpsCounterIniSection, L"hotkeyEnabled",
+                       L"FpsHotkeyEnabled", 1) != 0;
+    g_fpsHotkeyModifier = static_cast<UINT>(
+        ReadIntSetting(iniPath, kFpsCounterIniSection, L"hotkeyModifier",
+                       L"FpsHotkeyModifier", 0));
+    wchar_t fpsHotkeyKey[32] = {};
+    ReadFpsHotkeyKey(
+        iniPath, fpsHotkeyKey,
+        static_cast<DWORD>(sizeof(fpsHotkeyKey) / sizeof(fpsHotkeyKey[0])));
+    g_fpsHotkeyKey = ParseVirtualKey(fpsHotkeyKey, 0);
+    g_logEnabled =
+        ReadIntSetting(iniPath, kGeneralIniSection, L"log", L"Log", 0) != 0;
+
+    Log("config loaded: ini=%ls Log=%d AntiAFK=%d ShowFPS=%d "
+        "FpsHotkeyEnabled=%d FpsHotkeyModifier=0x%02X FpsHotkeyKey=0x%02X",
+        iniPath,
+        g_logEnabled ? 1 : 0, g_antiAfk ? 1 : 0,
+        g_showFpsOverlay ? 1 : 0, g_fpsHotkeyEnabled ? 1 : 0,
+        g_fpsHotkeyModifier, g_fpsHotkeyKey);
+}
+
+void SaveFpsOverlayState(LONG enabled) {
+    wchar_t iniPath[MAX_PATH] = {};
+    if (!BuildIniPath(iniPath, MAX_PATH)) {
+        return;
     }
 
-    g_antiAfk = antiAfk != 0;
-    g_logEnabled = GetPrivateProfileIntW(kIniSection, L"Log", 0, iniPath) != 0;
+    const wchar_t* section = kFpsCounterIniSection;
+    const wchar_t* key = L"show";
+    if (!HasIniSetting(iniPath, section, key)) {
+        if (HasIniSetting(iniPath, kLegacyIniSection, L"ShowFPS")) {
+            section = kLegacyIniSection;
+            key = L"ShowFPS";
+        } else if (HasIniSetting(iniPath, kOlderLegacyIniSection,
+                                 L"ShowFPS")) {
+            section = kOlderLegacyIniSection;
+            key = L"ShowFPS";
+        }
+    }
 
-    Log("config loaded: ini=%ls Log=%d AntiAFK=%d", iniPath,
-        g_logEnabled ? 1 : 0, g_antiAfk ? 1 : 0);
+    const wchar_t* value = enabled ? L"1" : L"0";
+    if (!WritePrivateProfileStringW(section, key, value, iniPath)) {
+        Log("FPS overlay state save failed: error=%lu", GetLastError());
+        return;
+    }
+    Log("FPS overlay state saved: enabled=%ld", enabled);
 }
 
 bool g_borderlessApplied = false;
@@ -288,7 +441,6 @@ void RestoreDesktopMode(const char* reason);
 // the key long after the physical (async) state says it was released.
 volatile LONG g_stickyMutedKeys[256] = {};  // polled key-state APIs
 volatile LONG g_msgMutedKeys[256] = {};     // window keyboard messages
-
 // TAB passes through with zero delay. In a real-world Alt+Tab the whole TAB
 // tap can land in the game before Alt even engages. Refocus must only mute
 // delayed/queued TAB state; injecting another TAB on restore can open the
@@ -456,6 +608,32 @@ LRESULT CALLBACK GameWndProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
 
         case WM_KEYDOWN:
         case WM_SYSKEYDOWN:
+            if (g_fpsHotkeyEnabled && g_fpsHotkeyKey != 0 &&
+                wParam == g_fpsHotkeyKey) {
+                bool modifierDown =
+                    g_fpsHotkeyModifier == 0 ||
+                    (GetKeyState(static_cast<int>(g_fpsHotkeyModifier)) &
+                     0x8000) != 0;
+                if ((lParam & (1L << 30)) == 0) {
+                    if (!modifierDown) {
+                        break;
+                    }
+                    InterlockedExchange(&g_fpsHotkeyPressConsumed, 1);
+                    LONG enabled = InterlockedCompareExchange(
+                                       &g_showFpsOverlay, 0, 0)
+                                       ? 0
+                                       : 1;
+                    InterlockedExchange(&g_showFpsOverlay, enabled);
+                    SaveFpsOverlayState(enabled);
+                    Log("wnd FPS overlay toggled: enabled=%ld modifier=0x%02X "
+                        "key=0x%02X",
+                        enabled, g_fpsHotkeyModifier, g_fpsHotkeyKey);
+                } else if (!InterlockedCompareExchange(
+                               &g_fpsHotkeyPressConsumed, 0, 0)) {
+                    break;
+                }
+                return 0;
+            }
             if (wParam == VK_TAB) {
                 Log("wnd TAB keydown message=%u lParam=0x%08lX",
                     message, static_cast<unsigned long>(lParam));
@@ -501,6 +679,11 @@ LRESULT CALLBACK GameWndProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
 
         case WM_KEYUP:
         case WM_SYSKEYUP:
+            if (g_fpsHotkeyEnabled && g_fpsHotkeyKey != 0 &&
+                wParam == g_fpsHotkeyKey &&
+                InterlockedExchange(&g_fpsHotkeyPressConsumed, 0)) {
+                return 0;
+            }
             if (wParam == VK_TAB) {
                 Log("wnd TAB keyup message=%u", message);
                 if (TabSynthActive()) {
@@ -705,11 +888,12 @@ void ApplyWindowedPresentParams(D3DPRESENT_PARAMETERS* params) {
     params->FullScreen_RefreshRateInHz = 0;
     params->PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;
     params->SwapEffect = D3DSWAPEFFECT_DISCARD;
-    if (params->BackBufferFormat == D3DFMT_R5G6B5 ||
-        params->BackBufferFormat == D3DFMT_X1R5G5B5 ||
-        params->BackBufferFormat == D3DFMT_A1R5G5B5) {
-        params->BackBufferFormat = D3DFMT_X8R8G8B8;
-    }
+}
+
+bool Is16BitFormat(D3DFORMAT format) {
+    return format == D3DFMT_R5G6B5 ||
+           format == D3DFMT_X1R5G5B5 ||
+           format == D3DFMT_A1R5G5B5;
 }
 
 // Fills `converted` with a fixed-up copy of the caller's parameters. The
@@ -789,6 +973,141 @@ HWND GetDeviceWindow(IDirect3DDevice9* device,
 }
 
 HRESULT WINAPI HookedReset(IDirect3DDevice9* device, D3DPRESENT_PARAMETERS* params);
+void ApplyNoFrameDelay();
+
+const unsigned char* FpsGlyph(char character) {
+    static const unsigned char space[7] = {0, 0, 0, 0, 0, 0, 0};
+    static const unsigned char f[7] = {31, 16, 16, 30, 16, 16, 16};
+    static const unsigned char p[7] = {30, 17, 17, 30, 16, 16, 16};
+    static const unsigned char s[7] = {15, 16, 16, 14, 1, 1, 30};
+    static const unsigned char digits[10][7] = {
+        {14, 17, 19, 21, 25, 17, 14},
+        {4, 12, 4, 4, 4, 4, 14},
+        {14, 17, 1, 2, 4, 8, 31},
+        {30, 1, 1, 14, 1, 1, 30},
+        {2, 6, 10, 18, 31, 2, 2},
+        {31, 16, 16, 30, 1, 1, 30},
+        {14, 16, 16, 30, 17, 17, 14},
+        {31, 1, 2, 4, 8, 8, 8},
+        {14, 17, 17, 14, 17, 17, 14},
+        {14, 17, 17, 15, 1, 1, 14},
+    };
+
+    switch (character) {
+        case 'F': return f;
+        case 'P': return p;
+        case 'S': return s;
+        case ' ': return space;
+        default:
+            if (character >= '0' && character <= '9') {
+                return digits[character - '0'];
+            }
+            return space;
+    }
+}
+
+void DrawFpsOverlay(IDirect3DDevice9* device, unsigned fps) {
+    if (!device || !g_showFpsOverlay) {
+        return;
+    }
+
+    char text[24] = {};
+    std::snprintf(text, sizeof(text), "FPS %u", fps);
+
+    constexpr LONG scale = 3;
+    constexpr LONG glyphAdvance = 6 * scale;
+    const LONG textWidth =
+        static_cast<LONG>(std::strlen(text)) * glyphAdvance - scale;
+
+    D3DVIEWPORT9 viewport = {};
+    if (FAILED(device->GetViewport(&viewport))) {
+        return;
+    }
+
+    const LONG originX =
+        static_cast<LONG>(viewport.X + viewport.Width) - textWidth - 14;
+    const LONG originY = static_cast<LONG>(viewport.Y) + 14;
+    constexpr size_t kMaxRects = 640;
+    D3DRECT pixels[kMaxRects] = {};
+    size_t pixelCount = 0;
+
+    for (size_t glyphIndex = 0; text[glyphIndex] != '\0'; ++glyphIndex) {
+        const unsigned char* glyph = FpsGlyph(text[glyphIndex]);
+        for (LONG row = 0; row < 7; ++row) {
+            for (LONG column = 0; column < 5; ++column) {
+                if (!(glyph[row] & (1u << (4 - column))) ||
+                    pixelCount >= kMaxRects) {
+                    continue;
+                }
+                const LONG left =
+                    originX + static_cast<LONG>(glyphIndex) * glyphAdvance +
+                    column * scale;
+                const LONG top = originY + row * scale;
+                pixels[pixelCount++] = {
+                    left, top, left + scale, top + scale
+                };
+            }
+        }
+    }
+
+    D3DRECT background = {
+        originX - 6, originY - 6,
+        originX + textWidth + 6, originY + 7 * scale + 6
+    };
+    device->Clear(1, &background, D3DCLEAR_TARGET,
+                  D3DCOLOR_XRGB(12, 12, 12), 1.0f, 0);
+    if (pixelCount) {
+        device->Clear(static_cast<DWORD>(pixelCount), pixels, D3DCLEAR_TARGET,
+                      D3DCOLOR_XRGB(100, 255, 130), 1.0f, 0);
+    }
+}
+
+HRESULT WINAPI HookedPresent(IDirect3DDevice9* device,
+                             const RECT* sourceRect,
+                             const RECT* destRect,
+                             HWND destWindowOverride,
+                             const RGNDATA* dirtyRegion) {
+    static ULONGLONG sampleStart = 0;
+    static unsigned sampleFrames = 0;
+    static unsigned measuredFps = 0;
+
+    const ULONGLONG now = GetTickCount64();
+    if (!sampleStart) {
+        sampleStart = now;
+    }
+    ++sampleFrames;
+    const ULONGLONG elapsed = now - sampleStart;
+    if (elapsed >= 500) {
+        measuredFps = static_cast<unsigned>(
+            (static_cast<ULONGLONG>(sampleFrames) * 1000 + elapsed / 2) /
+            elapsed);
+        sampleStart = now;
+        sampleFrames = 0;
+    }
+
+    DrawFpsOverlay(device, measuredFps);
+    return g_originalPresent(device, sourceRect, destRect,
+                             destWindowOverride, dirtyRegion);
+}
+
+void HookDevicePresent(IDirect3DDevice9* device) {
+    if (g_originalPresent || !device) {
+        Log("present hook skipped: existing=%d device=0x%p",
+            g_originalPresent ? 1 : 0, device);
+        return;
+    }
+
+    void** vtable = *reinterpret_cast<void***>(device);
+    void* target = vtable[kVtablePresent];
+    MH_STATUS create = MH_CreateHook(target, reinterpret_cast<void*>(&HookedPresent),
+                                     reinterpret_cast<void**>(&g_originalPresent));
+    MH_STATUS enable = create == MH_OK ? MH_EnableHook(target) : create;
+    Log("present hook: target=0x%p create=%d enable=%d original=0x%p",
+        target, create, enable, reinterpret_cast<void*>(g_originalPresent));
+    if (create != MH_OK || enable != MH_OK) {
+        g_originalPresent = nullptr;
+    }
+}
 
 void HookDeviceReset(IDirect3DDevice9* device) {
     if (g_originalReset || !device) {
@@ -816,6 +1135,7 @@ void AfterCreateDevice(IDirect3DDevice9* device,
                        ConvertMode mode) {
     __try {
         HookDeviceReset(device);
+        HookDevicePresent(device);
 
         HWND window = GetDeviceWindow(device, params, focusWindow);
         Log("after CreateDevice: device=0x%p window=0x%p focus=0x%p mode=%s",
@@ -838,7 +1158,8 @@ void AfterReset(IDirect3DDevice9* device,
         Log("after Reset: device=0x%p window=0x%p mode=%s",
             device, GetDeviceWindow(device, params, nullptr), ConvertModeName(mode));
         if (mode == ConvertFullscreen) {
-            ApplyBorderlessStyle(GetDeviceWindow(device, params, nullptr));
+            HWND window = GetDeviceWindow(device, params, nullptr);
+            ApplyBorderlessStyle(window);
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         Log("after Reset failed with exception");
@@ -850,7 +1171,8 @@ HRESULT WINAPI HookedReset(IDirect3DDevice9* device, D3DPRESENT_PARAMETERS* para
 
     D3DPRESENT_PARAMETERS converted = {};
     ConvertMode mode = ConvertPresentParams(params, &converted);
-    D3DPRESENT_PARAMETERS* effective = mode == ConvertNone ? params : &converted;
+    D3DPRESENT_PARAMETERS* effective =
+        mode == ConvertNone ? params : &converted;
 
     bool redundant = IsRedundantReset(device, effective);
     if (redundant && g_haveForwardedReset) {
@@ -882,6 +1204,19 @@ HRESULT WINAPI HookedReset(IDirect3DDevice9* device, D3DPRESENT_PARAMETERS* para
     g_suppressedRedundantResetCount = 0;
     Log("Reset original result=0x%08lX", result);
 
+    D3DPRESENT_PARAMETERS compatible = {};
+    if (FAILED(result) && mode == ConvertFullscreen &&
+        Is16BitFormat(converted.BackBufferFormat)) {
+        compatible = converted;
+        compatible.BackBufferFormat = D3DFMT_X8R8G8B8;
+        LogPresentParams("Reset 16-bit compatible retry", &compatible);
+        result = g_originalReset(device, &compatible);
+        Log("Reset 16-bit compatible result=0x%08lX", result);
+        if (SUCCEEDED(result)) {
+            effective = &compatible;
+        }
+    }
+
     if (FAILED(result) && mode != ConvertNone) {
         LogPresentParams("Reset fallback input", params);
         result = g_originalReset(device, params);
@@ -893,6 +1228,7 @@ HRESULT WINAPI HookedReset(IDirect3DDevice9* device, D3DPRESENT_PARAMETERS* para
     if (SUCCEEDED(result)) {
         RememberAppliedParams(effective);
         g_haveForwardedReset = true;
+        ApplyNoFrameDelay();
         if (mode != ConvertNone) {
             AfterReset(device, effective, mode);
         }
@@ -912,7 +1248,6 @@ HRESULT WINAPI HookedCreateDevice(IDirect3D9* self,
     Log("CreateDevice enter: self=0x%p adapter=%u type=%u focus=0x%p behavior=0x%08lX params=0x%p out=0x%p",
         self, adapter, deviceType, focusWindow, behaviorFlags, params, device);
     LogPresentParams("CreateDevice input", params);
-
     D3DPRESENT_PARAMETERS converted = {};
     ConvertMode mode = ConvertPresentParams(params, &converted);
     D3DPRESENT_PARAMETERS* effective = mode == ConvertNone ? params : &converted;
@@ -925,6 +1260,21 @@ HRESULT WINAPI HookedCreateDevice(IDirect3D9* self,
                                             behaviorFlags, effective, device);
     Log("CreateDevice original result=0x%08lX device=0x%p",
         result, device ? *device : nullptr);
+
+    D3DPRESENT_PARAMETERS compatible = {};
+    if (FAILED(result) && mode == ConvertFullscreen &&
+        Is16BitFormat(converted.BackBufferFormat)) {
+        compatible = converted;
+        compatible.BackBufferFormat = D3DFMT_X8R8G8B8;
+        LogPresentParams("CreateDevice 16-bit compatible retry", &compatible);
+        result = g_originalCreateDevice(self, adapter, deviceType, focusWindow,
+                                        behaviorFlags, &compatible, device);
+        Log("CreateDevice 16-bit compatible result=0x%08lX device=0x%p",
+            result, device ? *device : nullptr);
+        if (SUCCEEDED(result)) {
+            effective = &compatible;
+        }
+    }
 
     if (FAILED(result) && mode != ConvertNone) {
         LogPresentParams("CreateDevice fallback input", params);
@@ -1040,6 +1390,71 @@ void ApplyNoFrameDelay() {
             return;
         }
         Log("NoFrameDelay patched 0x%08lX", p.addr);
+    }
+}
+
+bool UpdateGameRefreshRate() {
+    if (reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr)) != 0x00400000) {
+        Log("RefreshRateFix skipped: module base is not 0x00400000");
+        return false;
+    }
+
+    DEVMODEW mode = {};
+    mode.dmSize = sizeof(mode);
+    if (!EnumDisplaySettingsExW(nullptr, ENUM_CURRENT_SETTINGS, &mode, 0) ||
+        mode.dmDisplayFrequency <= 1) {
+        Log("RefreshRateFix skipped: desktop mode query failed");
+        return false;
+    }
+
+    DWORD* gameRefreshRate = reinterpret_cast<DWORD*>(0x008E243C);
+    __try {
+        *gameRefreshRate = mode.dmDisplayFrequency;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Log("RefreshRateFix failed writing game refresh rate");
+        return false;
+    }
+    Log("RefreshRateFix set game refresh rate to %u Hz",
+        mode.dmDisplayFrequency);
+    return true;
+}
+
+int __cdecl HookedApplyVideoMode(void* arg1, void* arg2, void* arg3) {
+    // Matches RefreshRateFixByDarkP1xel32: GTA reads this global while
+    // rebuilding the selected video mode.
+    UpdateGameRefreshRate();
+    ApplyNoFrameDelay();
+    int result = g_originalApplyVideoMode(arg1, arg2, arg3);
+    // Other patches may restore the original frame-delay bytes while video
+    // resources are rebuilt. Make our change persistent across mode switches.
+    ApplyNoFrameDelay();
+    return result;
+}
+
+void HookApplyVideoMode() {
+    if (reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr)) != 0x00400000) {
+        Log("RefreshRateFix hook skipped: module base is not 0x00400000");
+        return;
+    }
+
+    void* target = reinterpret_cast<void*>(0x007F6CB0);
+    const unsigned char expected[] = {
+        0x8A, 0x44, 0x24, 0x08, 0x83, 0xEC, 0x10
+    };
+    if (!BytesMatch(target, expected, sizeof(expected))) {
+        Log("RefreshRateFix hook skipped: signature mismatch at 0x007F6CB0");
+        return;
+    }
+
+    MH_STATUS create = MH_CreateHook(
+        target, reinterpret_cast<void*>(&HookedApplyVideoMode),
+        reinterpret_cast<void**>(&g_originalApplyVideoMode));
+    MH_STATUS enable = create == MH_OK ? MH_EnableHook(target) : create;
+    Log("RefreshRateFix hook: target=0x%p create=%d enable=%d original=0x%p",
+        target, create, enable,
+        reinterpret_cast<void*>(g_originalApplyVideoMode));
+    if (create != MH_OK || enable != MH_OK) {
+        g_originalApplyVideoMode = nullptr;
     }
 }
 
@@ -1361,9 +1776,9 @@ GetKeyboardStateFn g_originalGetKeyboardState = nullptr;
 volatile DWORD g_lastRefocusTick = 0;
 
 // For a short window after the game regains focus, TAB reads as released on
-// every input path. Buffered/queued input (DirectInput event queues, lagging
-// key-state tables) can deliver the TAB of an Alt+Tab long after the key was
-// physically released, past every state-based mute.
+// the hooked user32 input paths. Queued messages and lagging key-state tables
+// can deliver the TAB of an Alt+Tab long after the key was physically
+// released, past every state-based mute.
 constexpr DWORD kTabRefocusGraceMs = 200;
 
 bool TabRefocusGraceActive() {
@@ -1566,9 +1981,20 @@ GetMessageTFn g_originalGetMessageA = nullptr;
 GetMessageTFn g_originalGetMessageW = nullptr;
 HHOOK g_getMessageHook = nullptr;
 
-void FilterQueuedTabMessage(MSG* msg) {
+void FilterQueuedInputMessage(MSG* msg) {
     __try {
-        if (!msg || msg->wParam != VK_TAB) {
+        if (!msg) {
+            return;
+        }
+        // MoonLoader's consumeWindowMessage(true, true) neutralizes this
+        // event while the game reads its queue, before SA-MP's window-mode
+        // handler can act on it.
+        if (msg->message == WM_SYSKEYUP && msg->wParam == VK_RETURN) {
+            Log("pump WM_SYSKEYUP/VK_RETURN neutralized");
+            msg->message = WM_NULL;
+            return;
+        }
+        if (msg->wParam != VK_TAB) {
             return;
         }
         bool down = msg->message == WM_KEYDOWN || msg->message == WM_SYSKEYDOWN;
@@ -1603,7 +2029,7 @@ BOOL WINAPI HookedPeekMessageA(LPMSG msg, HWND window, UINT filterMin,
     BOOL result = g_originalPeekMessageA(msg, window, filterMin, filterMax,
                                          removeFlags);
     if (result) {
-        FilterQueuedTabMessage(msg);
+        FilterQueuedInputMessage(msg);
     }
     return result;
 }
@@ -1613,7 +2039,7 @@ BOOL WINAPI HookedPeekMessageW(LPMSG msg, HWND window, UINT filterMin,
     BOOL result = g_originalPeekMessageW(msg, window, filterMin, filterMax,
                                          removeFlags);
     if (result) {
-        FilterQueuedTabMessage(msg);
+        FilterQueuedInputMessage(msg);
     }
     return result;
 }
@@ -1622,7 +2048,7 @@ BOOL WINAPI HookedGetMessageA(LPMSG msg, HWND window, UINT filterMin,
                               UINT filterMax) {
     BOOL result = g_originalGetMessageA(msg, window, filterMin, filterMax);
     if (result != 0 && result != -1) {
-        FilterQueuedTabMessage(msg);
+        FilterQueuedInputMessage(msg);
     }
     return result;
 }
@@ -1631,14 +2057,14 @@ BOOL WINAPI HookedGetMessageW(LPMSG msg, HWND window, UINT filterMin,
                               UINT filterMax) {
     BOOL result = g_originalGetMessageW(msg, window, filterMin, filterMax);
     if (result != 0 && result != -1) {
-        FilterQueuedTabMessage(msg);
+        FilterQueuedInputMessage(msg);
     }
     return result;
 }
 
 LRESULT CALLBACK GetMsgHookProc(int code, WPARAM wParam, LPARAM lParam) {
     if (code == HC_ACTION && lParam) {
-        FilterQueuedTabMessage(reinterpret_cast<MSG*>(lParam));
+        FilterQueuedInputMessage(reinterpret_cast<MSG*>(lParam));
     }
     return CallNextHookEx(nullptr, code, wParam, lParam);
 }
@@ -1677,241 +2103,6 @@ void InstallGetMessageHook(HWND window) {
         g_getMessageHook ? 0 : GetLastError());
 }
 
-// --- DirectInput keyboard -------------------------------------------------
-// SA-MP reads the keyboard through DirectInput as well; that path bypasses
-// every user32 hook above. The buffered event queue can also hand out the
-// TAB press of an Alt+Tab after the focus already returned to the game.
-
-using DirectInput8CreateFn = HRESULT (WINAPI*)(HINSTANCE instance, DWORD version,
-                                               REFIID iid, LPVOID* out,
-                                               LPUNKNOWN outer);
-using DICreateDeviceFn = HRESULT (WINAPI*)(void* self, REFGUID rguid,
-                                           void** device, LPUNKNOWN outer);
-using DIGetDeviceStateFn = HRESULT (WINAPI*)(void* self, DWORD size, LPVOID data);
-using DIGetDeviceDataFn = HRESULT (WINAPI*)(void* self, DWORD objectSize,
-                                            DIDEVICEOBJECTDATA* entries,
-                                            DWORD* count, DWORD flags);
-
-DirectInput8CreateFn g_originalDirectInput8Create = nullptr;
-DICreateDeviceFn g_originalDICreateDevice = nullptr;
-DIGetDeviceStateFn g_originalDIGetDeviceState = nullptr;
-DIGetDeviceDataFn g_originalDIGetDeviceData = nullptr;
-void* g_diCreateDeviceTarget = nullptr;
-void* g_diGetDeviceStateTarget = nullptr;
-void* g_diGetDeviceDataTarget = nullptr;
-
-// GUID_SysKeyboard, spelled out to avoid linking dxguid.lib.
-const GUID kGuidSysKeyboard =
-    {0x6F1D2B61, 0xD5A0, 0x11CF, {0xBF, 0xC7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00}};
-
-constexpr DWORD kDikTab = 0x0F;
-constexpr DWORD kDikLAlt = 0x38;
-constexpr DWORD kDikRAlt = 0xB8;
-constexpr int kMaxDiKeyboards = 8;
-
-void* g_diKeyboards[kMaxDiKeyboards] = {};
-LONG g_diKeyboardCount = 0;
-
-bool IsDiKeyboard(void* device) {
-    LONG count = g_diKeyboardCount;
-    if (count > kMaxDiKeyboards) {
-        count = kMaxDiKeyboards;
-    }
-    for (LONG i = 0; i < count; ++i) {
-        if (g_diKeyboards[i] == device) {
-            return true;
-        }
-    }
-    return false;
-}
-
-void RememberDiKeyboard(void* device) {
-    if (!device || IsDiKeyboard(device)) {
-        return;
-    }
-    LONG index = InterlockedIncrement(&g_diKeyboardCount) - 1;
-    if (index < kMaxDiKeyboards) {
-        g_diKeyboards[index] = device;
-        Log("DI keyboard device remembered: device=0x%p index=%ld", device, index);
-    }
-}
-
-HRESULT WINAPI HookedDIGetDeviceState(void* self, DWORD size, LPVOID data) {
-    HRESULT result = g_originalDIGetDeviceState(self, size, data);
-    if (FAILED(result) || !data || !IsDiKeyboard(self)) {
-        return result;
-    }
-    __try {
-        BYTE* keys = static_cast<BYTE*>(data);
-        if (!ForegroundBelongsToGame()) {
-            std::memset(data, 0, size);
-        } else if (size > kDikTab && (keys[kDikTab] & 0x80)) {
-            bool altDown = (size > kDikRAlt) &&
-                           ((keys[kDikLAlt] | keys[kDikRAlt]) & 0x80);
-            bool suppress = altDown || TabRefocusGraceActive();
-            LogTabDownRead("DI GetDeviceState", _ReturnAddress(), suppress);
-            if (suppress) {
-                keys[kDikTab] = 0;
-            }
-        }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-    }
-    return result;
-}
-
-HRESULT WINAPI HookedDIGetDeviceData(void* self, DWORD objectSize,
-                                     DIDEVICEOBJECTDATA* entries,
-                                     DWORD* count, DWORD flags) {
-    HRESULT result = g_originalDIGetDeviceData(self, objectSize, entries,
-                                               count, flags);
-    if (FAILED(result) || !count || !IsDiKeyboard(self)) {
-        return result;
-    }
-    __try {
-        if (!ForegroundBelongsToGame()) {
-            *count = 0;
-            return result;
-        }
-        if (entries && objectSize >= sizeof(DWORD) * 2) {
-            BYTE* base = reinterpret_cast<BYTE*>(entries);
-            DWORD total = *count;
-            DWORD kept = 0;
-            for (DWORD i = 0; i < total; ++i) {
-                BYTE* entry = base + i * objectSize;
-                DWORD offset = *reinterpret_cast<DWORD*>(entry);
-                if (offset == kDikTab && TabRefocusGraceActive()) {
-                    LogTabDownRead("DI GetDeviceData", _ReturnAddress(), true);
-                    continue;
-                }
-                if (kept != i) {
-                    std::memmove(base + kept * objectSize, entry, objectSize);
-                }
-                ++kept;
-            }
-            *count = kept;
-        }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-    }
-    return result;
-}
-
-void HookDiDeviceMethods(void* device) {
-    __try {
-        void** vtable = *reinterpret_cast<void***>(device);
-
-        void* stateTarget = vtable[9];   // IDirectInputDevice8::GetDeviceState
-        if (!g_diGetDeviceStateTarget) {
-            MH_STATUS create = MH_CreateHook(
-                stateTarget, reinterpret_cast<void*>(&HookedDIGetDeviceState),
-                reinterpret_cast<void**>(&g_originalDIGetDeviceState));
-            MH_STATUS enable = create == MH_OK ? MH_EnableHook(stateTarget) : create;
-            Log("DI GetDeviceState hook: target=0x%p create=%d enable=%d",
-                stateTarget, create, enable);
-            if (create == MH_OK && enable == MH_OK) {
-                g_diGetDeviceStateTarget = stateTarget;
-            } else {
-                g_originalDIGetDeviceState = nullptr;
-            }
-        } else if (g_diGetDeviceStateTarget != stateTarget) {
-            Log("DI GetDeviceState second vtable ignored: target=0x%p", stateTarget);
-        }
-
-        void* dataTarget = vtable[10];   // IDirectInputDevice8::GetDeviceData
-        if (!g_diGetDeviceDataTarget) {
-            MH_STATUS create = MH_CreateHook(
-                dataTarget, reinterpret_cast<void*>(&HookedDIGetDeviceData),
-                reinterpret_cast<void**>(&g_originalDIGetDeviceData));
-            MH_STATUS enable = create == MH_OK ? MH_EnableHook(dataTarget) : create;
-            Log("DI GetDeviceData hook: target=0x%p create=%d enable=%d",
-                dataTarget, create, enable);
-            if (create == MH_OK && enable == MH_OK) {
-                g_diGetDeviceDataTarget = dataTarget;
-            } else {
-                g_originalDIGetDeviceData = nullptr;
-            }
-        } else if (g_diGetDeviceDataTarget != dataTarget) {
-            Log("DI GetDeviceData second vtable ignored: target=0x%p", dataTarget);
-        }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        Log("DI device hook failed with exception");
-    }
-}
-
-HRESULT WINAPI HookedDICreateDevice(void* self, REFGUID rguid,
-                                    void** device, LPUNKNOWN outer) {
-    HRESULT result = g_originalDICreateDevice(self, rguid, device, outer);
-    __try {
-        bool keyboard = std::memcmp(&rguid, &kGuidSysKeyboard, sizeof(GUID)) == 0;
-        char callerText[160] = {};
-        FormatCallerAddress(_ReturnAddress(), callerText, sizeof(callerText));
-        Log("DI CreateDevice: result=0x%08lX keyboard=%d device=0x%p caller=%s",
-            result, keyboard ? 1 : 0,
-            device ? *device : nullptr, callerText);
-        if (SUCCEEDED(result) && keyboard && device && *device) {
-            RememberDiKeyboard(*device);
-            HookDiDeviceMethods(*device);
-        }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        Log("DI CreateDevice post-processing failed with exception");
-    }
-    return result;
-}
-
-HRESULT WINAPI HookedDirectInput8Create(HINSTANCE instance, DWORD version,
-                                        REFIID iid, LPVOID* out,
-                                        LPUNKNOWN outer) {
-    HRESULT result = g_originalDirectInput8Create(instance, version, iid, out, outer);
-    __try {
-        Log("DirectInput8Create: result=0x%08lX interface=0x%p",
-            result, out ? *out : nullptr);
-        if (SUCCEEDED(result) && out && *out) {
-            void** vtable = *reinterpret_cast<void***>(*out);
-            void* target = vtable[3];   // IDirectInput8::CreateDevice
-            if (!g_diCreateDeviceTarget) {
-                MH_STATUS create = MH_CreateHook(
-                    target, reinterpret_cast<void*>(&HookedDICreateDevice),
-                    reinterpret_cast<void**>(&g_originalDICreateDevice));
-                MH_STATUS enable = create == MH_OK ? MH_EnableHook(target) : create;
-                Log("DI CreateDevice hook: target=0x%p create=%d enable=%d",
-                    target, create, enable);
-                if (create == MH_OK && enable == MH_OK) {
-                    g_diCreateDeviceTarget = target;
-                } else {
-                    g_originalDICreateDevice = nullptr;
-                }
-            } else if (g_diCreateDeviceTarget != target) {
-                Log("DI CreateDevice second vtable ignored: target=0x%p", target);
-            }
-        }
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        Log("DirectInput8Create post-processing failed with exception");
-    }
-    return result;
-}
-
-void HookDirectInput() {
-    HMODULE dinput8 = LoadLibraryW(L"dinput8.dll");
-    if (!dinput8) {
-        Log("dinput8 LoadLibrary failed: error=%lu", GetLastError());
-        return;
-    }
-    void* target = reinterpret_cast<void*>(
-        GetProcAddress(dinput8, "DirectInput8Create"));
-    if (!target) {
-        Log("DirectInput8Create export not found");
-        return;
-    }
-    MH_STATUS create = MH_CreateHook(
-        target, reinterpret_cast<void*>(&HookedDirectInput8Create),
-        reinterpret_cast<void**>(&g_originalDirectInput8Create));
-    MH_STATUS enable = create == MH_OK ? MH_EnableHook(target) : create;
-    Log("DirectInput8Create hook: target=0x%p create=%d enable=%d",
-        target, create, enable);
-    if (create != MH_OK || enable != MH_OK) {
-        g_originalDirectInput8Create = nullptr;
-    }
-}
-
 IDirect3D9* WINAPI HookedDirect3DCreate9(UINT sdkVersion) {
     Log("Direct3DCreate9 enter: sdk=%u", sdkVersion);
     IDirect3D9* d3d = g_originalDirect3DCreate9(sdkVersion);
@@ -1948,6 +2139,8 @@ DWORD WINAPI Initialize(LPVOID) {
 
     ApplyNoFrameDelay();
     CaptureDesktopMode();
+    UpdateGameRefreshRate();
+    HookApplyVideoMode();
     HookChangeDisplaySettings();
 
     HMODULE d3d9 = LoadLibraryW(L"d3d9.dll");
