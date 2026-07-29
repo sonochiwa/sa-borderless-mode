@@ -23,15 +23,16 @@ const wchar_t kOlderLegacyIniSection[] = L"SABorderless";
 // stop misdetecting the short file as UTF-16 mojibake ("Chinese" text).
 const wchar_t kDefaultIni[] =
     L"\xFEFF"
-    L"# BorderlessMode v1.3.0\r\n"
+    L"# BorderlessMode v1.4.0\r\n"
     L"# Created by sonochiwa\r\n"
     L"# Source code: https://github.com/sonochiwa/sa-borderless-mode\r\n"
     L"# Default FPS toggle hotkey: F11\r\n"
     L"\r\n"
     L"[general]\r\n"
-    L"antiAFK=0\r\n"
     L"log=0\r\n"
     L"\r\n"
+    L"# Shows GTA's actual in-game FPS. External tools such as NVIDIA\r\n"
+    L"# counters may show the window's refresh rate instead.\r\n"
     L"[fpsCounter]\r\n"
     L"show=0\r\n"
     L"hotkeyEnabled=1\r\n"
@@ -58,9 +59,7 @@ using PresentFn = HRESULT (WINAPI*)(IDirect3DDevice9* self,
                                     HWND destWindowOverride,
                                     const RGNDATA* dirtyRegion);
 using ApplyVideoModeFn = int (__cdecl*)(void* arg1, void* arg2, void* arg3);
-
 HMODULE g_module = nullptr;
-bool g_antiAfk = false;
 bool g_logEnabled = false;
 volatile LONG g_showFpsOverlay = 0;
 bool g_fpsHotkeyEnabled = true;
@@ -368,9 +367,6 @@ void LoadConfig() {
 
     CreateDefaultIniIfMissing(iniPath);
 
-    g_antiAfk =
-        ReadIntSetting(iniPath, kGeneralIniSection, L"antiAFK", L"AntiAFK", 0) !=
-        0;
     InterlockedExchange(
         &g_showFpsOverlay,
         ReadIntSetting(iniPath, kFpsCounterIniSection, L"show", L"ShowFPS", 0) !=
@@ -389,10 +385,10 @@ void LoadConfig() {
     g_logEnabled =
         ReadIntSetting(iniPath, kGeneralIniSection, L"log", L"Log", 0) != 0;
 
-    Log("config loaded: ini=%ls Log=%d AntiAFK=%d ShowFPS=%d "
+    Log("config loaded: ini=%ls Log=%d ShowFPS=%d "
         "FpsHotkeyEnabled=%d FpsHotkeyModifier=0x%02X FpsHotkeyKey=0x%02X",
         iniPath,
-        g_logEnabled ? 1 : 0, g_antiAfk ? 1 : 0,
+        g_logEnabled ? 1 : 0,
         g_showFpsOverlay ? 1 : 0, g_fpsHotkeyEnabled ? 1 : 0,
         g_fpsHotkeyModifier, g_fpsHotkeyKey);
 }
@@ -425,6 +421,13 @@ void SaveFpsOverlayState(LONG enabled) {
 }
 
 bool g_borderlessApplied = false;
+// Set when the borderless geometry could not be applied because the window was
+// minimized; the next restore re-applies it.
+bool g_borderlessPending = false;
+// Remains set from a real minimize/hide until the game actually becomes the
+// foreground application. GTA/RenderWare can change the show state behind
+// another application without ever activating the game.
+bool g_windowPutAway = false;
 
 DEVMODEW g_desktopMode = {};
 bool g_haveDesktopMode = false;
@@ -449,9 +452,11 @@ volatile DWORD g_lastRealTabDownTick = 0;
 volatile LONG g_tabCompensatePending = 0;
 
 constexpr UINT_PTR kTabDeliveryTimerId = 0xB0DE1E55;
+constexpr UINT_PTR kBackgroundRestoreTimerId = 0xB0DE1E56;
 constexpr DWORD kTabUndoWindowMs = 450;
 constexpr UINT kTabCompensateDelayMs = 300;
 constexpr UINT kTabSynthTapMs = 60;
+constexpr UINT kBackgroundRestoreDelayMs = 100;
 
 // 0 = idle, 1 = compensation scheduled, 2 = injected keydown out, keyup
 // pending.
@@ -476,6 +481,10 @@ void InjectTabEvent(bool up) {
     UINT sent = SendInput(1, &input, sizeof(input));
     Log("TAB inject %s: sent=%u", up ? "keyup" : "keydown", sent);
 }
+
+// Defined below.
+void ApplyBorderlessStyle(HWND window);
+bool GameOwnsForeground();
 
 // Defined next to the key-state hooks below.
 void MuteKeysHeldAtRefocus();
@@ -522,33 +531,123 @@ void StartTabCompensationIfPending(HWND window) {
     Log("wnd TAB undo timer started");
 }
 
+void ScheduleBackgroundRestoreCheck(HWND window, const char* reason) {
+    if (!window || !g_windowPutAway) {
+        return;
+    }
+    SetTimer(window, kBackgroundRestoreTimerId,
+             kBackgroundRestoreDelayMs, nullptr);
+    Log("background restore check scheduled: %s iconic=%d visible=%d foreground=%d",
+        reason, IsIconic(window) ? 1 : 0,
+        IsWindowVisible(window) ? 1 : 0,
+        GameOwnsForeground() ? 1 : 0);
+}
+
+bool ShowDesktopOwnsForeground() {
+    HWND foreground = GetForegroundWindow();
+    HWND root = foreground ? GetAncestor(foreground, GA_ROOT) : nullptr;
+    if (root) {
+        foreground = root;
+    }
+
+    wchar_t className[32] = {};
+    if (!foreground ||
+        !GetClassNameW(foreground, className,
+                       static_cast<int>(sizeof(className) /
+                                        sizeof(className[0])))) {
+        return false;
+    }
+    return wcscmp(className, L"Progman") == 0 ||
+           wcscmp(className, L"WorkerW") == 0;
+}
+
+void MinimizeForShowDesktop(HWND window, const char* reason) {
+    if (!g_borderlessApplied || !window || IsIconic(window) ||
+        !ShowDesktopOwnsForeground()) {
+        return;
+    }
+
+    // A WS_POPUP borderless window is only placed behind Progman by Win+D;
+    // Explorer does not give it the normal minimized show state. When Show
+    // Desktop ends because another application opens, that leaves GTA visible
+    // behind it. Explicitly give the game the minimized state while Progman is
+    // foreground, without taking activation away from the shell.
+    g_windowPutAway = true;
+    g_borderlessPending = true;
+    Log("show desktop detected (%s): minimizing borderless window", reason);
+    ShowWindow(window, SW_SHOWMINNOACTIVE);
+}
+
 LRESULT CALLBACK GameWndProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
         case WM_ACTIVATE:
-            Log("wnd WM_ACTIVATE window=0x%p wParam=0x%p lParam=0x%p active=%u minimized=%u antiAfk=%d",
+            Log("wnd WM_ACTIVATE window=0x%p wParam=0x%p lParam=0x%p active=%u minimized=%u",
                 window, reinterpret_cast<void*>(wParam), reinterpret_cast<void*>(lParam),
-                LOWORD(wParam), HIWORD(wParam), g_antiAfk ? 1 : 0);
-            RequireNextReset("WM_ACTIVATE");
+                LOWORD(wParam), HIWORD(wParam));
+            // A windowed D3D9 device does not need to be reset merely because
+            // it lost activation. Re-arming GTA's redundant Reset here was the
+            // first half of the background-restore bug.
+            if (LOWORD(wParam) != WA_INACTIVE) {
+                if (g_windowPutAway) {
+                    // GTA can activate itself momentarily while another app is
+                    // opening. Accept the restore only if it still owns the
+                    // foreground after the short verification interval.
+                    ScheduleBackgroundRestoreCheck(window,
+                                                   "WM_ACTIVATE active");
+                } else {
+                    RequireNextReset("WM_ACTIVATE active");
+                }
+            } else {
+                MinimizeForShowDesktop(window, "WM_ACTIVATE inactive");
+            }
             break;
         case WM_ACTIVATEAPP:
-            Log("wnd WM_ACTIVATEAPP window=0x%p active=%u thread=%lu antiAfk=%d",
-                window, static_cast<unsigned>(wParam), static_cast<unsigned long>(lParam),
-                g_antiAfk ? 1 : 0);
-            RequireNextReset("WM_ACTIVATEAPP");
+            Log("wnd WM_ACTIVATEAPP window=0x%p active=%u thread=%lu",
+                window, static_cast<unsigned>(wParam),
+                static_cast<unsigned long>(lParam));
+            if (wParam) {
+                if (g_windowPutAway) {
+                    ScheduleBackgroundRestoreCheck(window,
+                                                   "WM_ACTIVATEAPP active");
+                } else {
+                    RequireNextReset("WM_ACTIVATEAPP active");
+                }
+            } else {
+                MinimizeForShowDesktop(window, "WM_ACTIVATEAPP inactive");
+            }
             break;
         case WM_SETFOCUS:
             Log("wnd WM_SETFOCUS window=0x%p previous=0x%p borderless=%d",
                 window, reinterpret_cast<void*>(wParam), g_borderlessApplied ? 1 : 0);
             break;
         case WM_KILLFOCUS:
-            Log("wnd WM_KILLFOCUS window=0x%p next=0x%p antiAfk=%d",
-                window, reinterpret_cast<void*>(wParam), g_antiAfk ? 1 : 0);
+            Log("wnd WM_KILLFOCUS window=0x%p next=0x%p",
+                window, reinterpret_cast<void*>(wParam));
             break;
         case WM_SIZE:
             Log("wnd WM_SIZE window=0x%p type=%u size=%ux%u",
                 window, static_cast<unsigned>(wParam),
                 LOWORD(lParam), HIWORD(lParam));
-            RequireNextReset("WM_SIZE");
+            if (wParam == SIZE_MINIMIZED) {
+                g_windowPutAway = true;
+                g_borderlessPending = true;
+                KillTimer(window, kBackgroundRestoreTimerId);
+                Log("window put away: minimized");
+            } else if (g_windowPutAway) {
+                // Do not trust SIZE_RESTORED alone. GTA can restore itself
+                // behind the application the user selected. Give a genuine
+                // taskbar/Alt+Tab activation a moment to arrive, then put the
+                // game back if it still does not own the foreground.
+                g_borderlessPending = true;
+                ScheduleBackgroundRestoreCheck(window,
+                                               "WM_SIZE restored");
+            } else {
+                g_windowPutAway = false;
+                RequireNextReset("WM_SIZE restored/resized");
+                if (g_borderlessPending) {
+                    ApplyBorderlessStyle(window);
+                }
+            }
             break;
         case WM_DISPLAYCHANGE:
             Log("wnd WM_DISPLAYCHANGE window=0x%p bpp=%u size=%ux%u",
@@ -560,6 +659,45 @@ LRESULT CALLBACK GameWndProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
         case WM_STYLECHANGING:
             Log("wnd WM_STYLECHANGING window=0x%p index=%ld borderless=%d",
                 window, static_cast<long>(wParam), g_borderlessApplied ? 1 : 0);
+            break;
+        case WM_SHOWWINDOW:
+            Log("wnd WM_SHOWWINDOW window=0x%p show=%u reason=%ld iconic=%d",
+                window, static_cast<unsigned>(wParam),
+                static_cast<long>(lParam),
+                IsIconic(window) ? 1 : 0);
+            if (!wParam && g_borderlessApplied) {
+                g_windowPutAway = true;
+                g_borderlessPending = true;
+                KillTimer(window, kBackgroundRestoreTimerId);
+                Log("window put away: hidden");
+            } else if (wParam && g_windowPutAway) {
+                ScheduleBackgroundRestoreCheck(window,
+                                               "WM_SHOWWINDOW shown");
+            }
+            break;
+        case WM_SYSCOMMAND:
+            Log("wnd WM_SYSCOMMAND window=0x%p command=0x%04X iconic=%d",
+                window, static_cast<unsigned>(wParam & 0xFFF0),
+                IsIconic(window) ? 1 : 0);
+            break;
+        case WM_WINDOWPOSCHANGING:
+            // The single choke point every geometry, Z-order and visibility
+            // change passes through, including changes started from another
+            // process. Only the interesting ones are logged.
+            if (lParam) {
+                const WINDOWPOS* position =
+                    reinterpret_cast<const WINDOWPOS*>(lParam);
+                if ((position->flags & SWP_SHOWWINDOW) ||
+                    !(position->flags & SWP_NOZORDER)) {
+                    Log("wnd WM_WINDOWPOSCHANGING window=0x%p flags=0x%08X "
+                        "insertAfter=0x%p pos=%d,%d size=%dx%d iconic=%d "
+                        "foreground=%d",
+                        window, position->flags, position->hwndInsertAfter,
+                        position->x, position->y, position->cx, position->cy,
+                        IsIconic(window) ? 1 : 0,
+                        GameOwnsForeground() ? 1 : 0);
+                }
+            }
             break;
     }
 
@@ -577,6 +715,10 @@ LRESULT CALLBACK GameWndProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
             if (LOWORD(wParam) != WA_INACTIVE) {
                 MuteKeysHeldAtRefocus();
                 StartTabCompensationIfPending(window);
+                if (!g_windowPutAway && g_borderlessPending &&
+                    !IsIconic(window)) {
+                    ApplyBorderlessStyle(window);
+                }
             } else {
                 NoteFocusLossForTab(window, "WM_ACTIVATE inactive");
             }
@@ -587,6 +729,31 @@ LRESULT CALLBACK GameWndProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
             break;
 
         case WM_TIMER:
+            if (wParam == kBackgroundRestoreTimerId) {
+                KillTimer(window, kBackgroundRestoreTimerId);
+                if (g_windowPutAway && !GameOwnsForeground()) {
+                    const bool iconic = IsIconic(window) != FALSE;
+                    const bool visible = IsWindowVisible(window) != FALSE;
+                    Log("background restore check fired: iconic=%d visible=%d",
+                        iconic ? 1 : 0, visible ? 1 : 0);
+                    if (!iconic) {
+                        // SW_SHOWMINNOACTIVE restores the minimized show state
+                        // without taking focus away from the user's window.
+                        ShowWindow(window, SW_SHOWMINNOACTIVE);
+                        Log("background restore cancelled: window minimized");
+                    }
+                    g_borderlessPending = true;
+                } else {
+                    g_windowPutAway = false;
+                    Log("background restore accepted: game owns foreground");
+                    RequireNextReset("verified foreground restore");
+                    if (g_borderlessPending &&
+                        !IsIconic(window)) {
+                        ApplyBorderlessStyle(window);
+                    }
+                }
+                return 0;
+            }
             if (wParam == kTabDeliveryTimerId) {
                 LONG phase = g_tabDeliveryPhase;
                 if (phase == 1) {
@@ -731,27 +898,6 @@ LRESULT CALLBACK GameWndProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
             break;
     }
 
-    if (g_antiAfk) {
-        switch (message) {
-            case WM_ACTIVATE:
-                if (LOWORD(wParam) == WA_INACTIVE) {
-                    Log("anti-afk rewrote WM_ACTIVATE inactive -> active");
-                    wParam = MAKEWPARAM(WA_ACTIVE, 0);
-                }
-                break;
-
-            case WM_ACTIVATEAPP:
-            case WM_NCACTIVATE:
-                Log("anti-afk forced active message=%u", message);
-                wParam = TRUE;
-                break;
-
-            case WM_KILLFOCUS:
-                Log("anti-afk suppressed WM_KILLFOCUS");
-                return 0;
-        }
-    }
-
     return ForwardToGame(window, message, wParam, lParam);
 }
 
@@ -811,11 +957,38 @@ private:
     HANDLE previous_ = nullptr;
 };
 
+// True while the window the user is actually working in belongs to the game.
+bool GameOwnsForeground() {
+    HWND foreground = GetForegroundWindow();
+    DWORD pid = 0;
+    if (foreground) {
+        GetWindowThreadProcessId(foreground, &pid);
+    }
+    return pid == GetCurrentProcessId();
+}
+
 void ApplyBorderlessStyle(HWND window) {
     if (!window || !IsWindow(window)) {
         Log("borderless skipped: invalid window=0x%p", window);
         return;
     }
+
+    // Minimized or hidden (Win+D, taskbar, "show desktop"): re-applying the
+    // borderless geometry here would pull the window back up behind whatever
+    // the user switched to. The game keeps calling Reset while minimized, so
+    // this path is hit as soon as anything re-arms the forwarded Reset. Wait
+    // for the window to come back instead. The very first application is
+    // exempt: that one has to show the window.
+    const bool firstApply = !g_borderlessApplied;
+    const bool iconic = IsIconic(window) != FALSE;
+    const bool visible = IsWindowVisible(window) != FALSE;
+    if (iconic || (!firstApply && !visible)) {
+        g_borderlessPending = true;
+        Log("borderless deferred: window=0x%p iconic=%d visible=%d first=%d",
+            window, iconic ? 1 : 0, visible ? 1 : 0, firstApply ? 1 : 0);
+        return;
+    }
+    g_borderlessPending = false;
 
     ScopedDpiAwareness dpiAware;
 
@@ -845,19 +1018,33 @@ void ApplyBorderlessStyle(HWND window) {
     int width = monitor.rcMonitor.right - monitor.rcMonitor.left;
     int height = monitor.rcMonitor.bottom - monitor.rcMonitor.top;
 
+    // Only claim the top of the Z-order while the game is the foreground app.
+    // A Reset that happens while the user works in another window must not
+    // raise the game over it, and must never activate it.
+    const bool gameForeground = GameOwnsForeground();
+    UINT positionFlags = SWP_FRAMECHANGED | SWP_NOACTIVATE;
+    if (!gameForeground) {
+        positionFlags |= SWP_NOZORDER;
+    }
+    if (firstApply && !visible) {
+        positionFlags |= SWP_SHOWWINDOW;
+    }
+
     Log("borderless applying: window=0x%p monitor=(%ld,%ld)-(%ld,%ld) "
-        "size=%dx%d style=0x%08lX->0x%08lX exstyle=0x%08lX->0x%08lX first=%d",
+        "size=%dx%d style=0x%08lX->0x%08lX exstyle=0x%08lX->0x%08lX first=%d "
+        "foreground=%d flags=0x%08X",
         window,
         monitor.rcMonitor.left, monitor.rcMonitor.top,
         monitor.rcMonitor.right, monitor.rcMonitor.bottom,
         width, height,
         oldStyle, style, oldExStyle, exStyle,
-        g_borderlessApplied ? 0 : 1);
+        g_borderlessApplied ? 0 : 1,
+        gameForeground ? 1 : 0, positionFlags);
 
-    SetWindowPos(window, HWND_TOP,
+    SetWindowPos(window, gameForeground ? HWND_TOP : nullptr,
                  monitor.rcMonitor.left, monitor.rcMonitor.top,
                  width, height,
-                 SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+                 positionFlags);
 
     if (!g_borderlessApplied) {
         HWND foreground = GetForegroundWindow();
@@ -1839,10 +2026,9 @@ bool StickyMuteFilter(int virtualKey, bool reportedDown) {
 }
 
 // Windows delivers keyboard *messages* only to the focused window, but the
-// game and SA-MP also poll the global key state every frame. With AntiAFK
-// the game keeps simulating in the background, so typing in another window
-// makes the character jump and fire. Polled key state is muted while the
-// foreground window belongs to another process.
+// game and SA-MP also poll the global key state every frame. Polled key state
+// is muted while the foreground window belongs to another process so held
+// keys from Alt+Tab cannot leak back into the game on refocus.
 bool ForegroundBelongsToGame() {
     HWND foreground = GetForegroundWindow();
     DWORD pid = 0;
@@ -2127,8 +2313,8 @@ void TryHookCreateDeviceThroughTemporaryObject(Direct3DCreate9Fn createD3D9) {
 DWORD WINAPI Initialize(LPVOID) {
     LoadConfig();
     LogOpen();
-    Log("initialize begin: module=0x%p antiAfk=%d log=%d",
-        g_module, g_antiAfk ? 1 : 0, g_logEnabled ? 1 : 0);
+    Log("initialize begin: module=0x%p log=%d",
+        g_module, g_logEnabled ? 1 : 0);
 
     MH_STATUS status = MH_Initialize();
     if (status != MH_OK && status != MH_ERROR_ALREADY_INITIALIZED) {
@@ -2167,13 +2353,6 @@ DWORD WINAPI Initialize(LPVOID) {
     Log("Direct3DCreate9 hook: create=%d enable=%d original=0x%p",
         create, enable, reinterpret_cast<void*>(g_originalDirect3DCreate9));
     TryHookCreateDeviceThroughTemporaryObject(createD3D9);
-    if (create == MH_OK && enable == MH_OK) {
-        HookSetCursorPos();
-        HookKeyStateApis();
-        HookMessagePump();
-        return 0;
-    }
-
     HookSetCursorPos();
     HookKeyStateApis();
     HookMessagePump();

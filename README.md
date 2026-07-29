@@ -19,7 +19,6 @@ Windows SDK, and MinHook sources vendored in `vendor\minhook`.
 - Leaves already-windowed setups alone and only removes the vsync wait.
 - Press **F11** to show or hide the real D3D presentation rate in-game.
 - Blocks **Alt+Enter** so the game cannot accidentally leave borderless mode.
-- Optionally keeps the game active in the background with `AntiAFK=1`.
 - Hides the TAB press of Alt+Tab from the game, so the SA:MP scoreboard no
   longer gets stuck open after switching back.
 
@@ -48,15 +47,16 @@ If `BorderlessMode.ini` is missing, the plugin creates it next to
 Edit `BorderlessMode.ini` and restart the game.
 
 ```ini
-# BorderlessMode v1.3.0
+# BorderlessMode v1.4.0
 # Created by sonochiwa
 # Source code: https://github.com/sonochiwa/sa-borderless-mode
 # Default FPS toggle hotkey: F11
 
 [general]
-antiAFK=0
 log=0
 
+# Shows GTA's actual in-game FPS. External tools such as NVIDIA
+# counters may show the window's refresh rate instead.
 [fpsCounter]
 show=0
 hotkeyEnabled=1
@@ -66,12 +66,18 @@ hotkeyKey=122
 
 | Section | Key | Default | Meaning |
 | ------- | --- | ------- | ------- |
-| `general` | `antiAFK` | `0` | `1` makes the game keep running while minimized or in the background. |
 | `general` | `log` | `0` | `1` writes `BorderlessMode.log` next to the ASI for diagnostics. |
 | `fpsCounter` | `show` | `0` | Shows the real D3D presentation rate. Its value is saved whenever the counter is toggled in game. |
 | `fpsCounter` | `hotkeyEnabled` | `1` | Enables hotkey handling. Set to `0` to disable it without removing the key. |
 | `fpsCounter` | `hotkeyModifier` | `0` | Optional modifier as a decimal Win32 virtual-key code. `0` means no modifier. |
 | `fpsCounter` | `hotkeyKey` | `122` | Main key as a decimal Win32 virtual-key code (`122` is F11). Removing the key or setting it to `0` disables hotkey handling. |
+
+> **Why the FPS counter is built in:** External programs, including NVIDIA
+> tools and other FPS overlays, may show a misleading value with this
+> borderless mode. They can count how often the game window is refreshed
+> instead of how many frames GTA is actually producing. The built-in counter
+> shows GTA's real in-game FPS, so it is the value to use when checking
+> performance.
 
 For example, use `hotkeyModifier=18` and `hotkeyKey=89` for **Alt + Y**.
 The main key is intercepted only while the configured modifier is held.
@@ -81,12 +87,10 @@ screen, close the process and send `BorderlessMode.log` from the GTA SA folder.
 
 Legacy `[BorderlessMode]` and `[SABorderless]` configurations remain supported.
 
-Anti-AFK rewrites focus-loss window messages such as `WM_ACTIVATE`,
-`WM_ACTIVATEAPP`, `WM_NCACTIVATE` and `WM_KILLFOCUS`. Because the game and
-SA:MP poll the global key state (`GetKeyState`, `GetAsyncKeyState`,
-`GetKeyboardState`) every frame, the plugin mutes those APIs whenever the
-foreground window belongs to another process, so typing in other windows no
-longer leaks into the game while it runs in the background.
+The game and SA:MP poll the global key state (`GetKeyState`,
+`GetAsyncKeyState`, `GetKeyboardState`). The plugin mutes those APIs while
+another process owns the foreground so held keys from Alt+Tab cannot leak into
+the game when it regains focus.
 
 The default release config is stored in `Config\BorderlessMode.ini`.
 
@@ -109,7 +113,7 @@ build\BorderlessMode.asi
 The local release archive is:
 
 ```text
-build\BorderlessMode-v1.3.0.zip
+build\BorderlessMode-v1.4.0.zip
 ```
 
 `build\` is generated output and is intentionally ignored by git.
