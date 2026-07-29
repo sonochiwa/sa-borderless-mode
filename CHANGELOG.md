@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.4.1 - 2026-07-29
+
+- Added a GitHub Actions release workflow that builds release binaries from
+  tagged commits.
+- Added SHA-256 checksum files and signed GitHub artifact attestations so
+  downloaded release archives can be verified against their source workflow.
+
 ## v1.4.0 - 2026-07-29
 
 - Removed Anti-AFK and its setting from the INI. This feature is better suited

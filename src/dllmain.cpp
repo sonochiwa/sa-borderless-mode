@@ -23,7 +23,7 @@ const wchar_t kOlderLegacyIniSection[] = L"SABorderless";
 // stop misdetecting the short file as UTF-16 mojibake ("Chinese" text).
 const wchar_t kDefaultIni[] =
     L"\xFEFF"
-    L"# BorderlessMode v1.4.0\r\n"
+    L"# BorderlessMode v1.4.1\r\n"
     L"# Created by sonochiwa\r\n"
     L"# Source code: https://github.com/sonochiwa/sa-borderless-mode\r\n"
     L"# Default FPS toggle hotkey: F11\r\n"
