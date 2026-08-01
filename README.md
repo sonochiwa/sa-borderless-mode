@@ -17,15 +17,15 @@ Windows SDK, and MinHook sources vendored in `vendor\minhook`.
 - Keeps working after alt-tab and in-game video setting changes by also handling
   `IDirect3DDevice9::Reset`.
 - Leaves already-windowed setups alone and only removes the vsync wait.
-- Press **F11** to show or hide the real D3D presentation rate in-game.
+- Press **F11** to show or hide GTA's actual in-game FPS.
 - Blocks **Alt+Enter** so the game cannot accidentally leave borderless mode.
 - Hides the TAB press of Alt+Tab from the game, so the SA:MP scoreboard no
   longer gets stuck open after switching back.
 
 The core borderless D3D9 hooks do not depend on a specific GTA executable.
-The integrated RefreshRateFix and NoFrameDelay features use GTA SA 1.0 US
-addresses and verify the expected code signatures before patching. On an
-unknown executable, those address-dependent patches are skipped safely.
+The integrated FPS counter, RefreshRateFix, and NoFrameDelay features use GTA
+SA 1.0 US addresses and verify the expected code signatures before patching.
+On an unknown executable, those address-dependent features are skipped safely.
 
 ## Installation
 
@@ -47,7 +47,7 @@ If `BorderlessMode.ini` is missing, the plugin creates it next to
 Edit `BorderlessMode.ini` and restart the game.
 
 ```ini
-# BorderlessMode v1.4.1
+# BorderlessMode v1.4.2
 # Created by sonochiwa
 # Source code: https://github.com/sonochiwa/sa-borderless-mode
 # Default FPS toggle hotkey: F11
@@ -67,7 +67,7 @@ hotkeyKey=122
 | Section | Key | Default | Meaning |
 | ------- | --- | ------- | ------- |
 | `general` | `log` | `0` | `1` writes `BorderlessMode.log` next to the ASI for diagnostics. |
-| `fpsCounter` | `show` | `0` | Shows the real D3D presentation rate. Its value is saved whenever the counter is toggled in game. |
+| `fpsCounter` | `show` | `0` | Shows GTA's actual in-game FPS. Its value is saved whenever the counter is toggled in game. |
 | `fpsCounter` | `hotkeyEnabled` | `1` | Enables hotkey handling. Set to `0` to disable it without removing the key. |
 | `fpsCounter` | `hotkeyModifier` | `0` | Optional modifier as a decimal Win32 virtual-key code. `0` means no modifier. |
 | `fpsCounter` | `hotkeyKey` | `122` | Main key as a decimal Win32 virtual-key code (`122` is F11). Removing the key or setting it to `0` disables hotkey handling. |
@@ -113,7 +113,7 @@ build\BorderlessMode.asi
 The local release archive is:
 
 ```text
-build\BorderlessMode-v1.4.1.zip
+build\BorderlessMode-v1.4.2.zip
 ```
 
 `build\` is generated output and is intentionally ignored by git.
@@ -125,7 +125,7 @@ contains the ZIP archive, a SHA-256 checksum file, and a signed GitHub artifact
 attestation that binds the archive to its source commit and workflow:
 
 ```bat
-gh attestation verify BorderlessMode-v1.4.1.zip -R sonochiwa/sa-borderless-mode
+gh attestation verify BorderlessMode-v1.4.2.zip -R sonochiwa/sa-borderless-mode
 ```
 
 ## Repository Layout

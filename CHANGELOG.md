@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.4.2 - 2026-08-01
+
+- Fixed NVIDIA Overlay disappearing or opening with only the Windows cursor
+  visible, including after Alt+Tab and restoring the game.
+- Removed unnecessary graphics resets when GTA regains focus. This keeps
+  third-party overlays from losing their rendering layer.
+- Changed the built-in FPS counter to use GTA's internal frame count instead
+  of the window presentation rate. External counters may still show the
+  monitor refresh rate in borderless mode.
+- Moved the FPS counter above GTA and SA:MP interface elements.
+
 ## v1.4.1 - 2026-07-29
 
 - Added a GitHub Actions release workflow that builds release binaries from

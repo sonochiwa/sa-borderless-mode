@@ -12,7 +12,6 @@ namespace {
 
 constexpr int kVtableCreateDevice = 16;
 constexpr int kVtableReset = 16;
-constexpr int kVtablePresent = 17;
 
 const wchar_t kGeneralIniSection[] = L"general";
 const wchar_t kFpsCounterIniSection[] = L"fpsCounter";
@@ -23,7 +22,7 @@ const wchar_t kOlderLegacyIniSection[] = L"SABorderless";
 // stop misdetecting the short file as UTF-16 mojibake ("Chinese" text).
 const wchar_t kDefaultIni[] =
     L"\xFEFF"
-    L"# BorderlessMode v1.4.1\r\n"
+    L"# BorderlessMode v1.4.2\r\n"
     L"# Created by sonochiwa\r\n"
     L"# Source code: https://github.com/sonochiwa/sa-borderless-mode\r\n"
     L"# Default FPS toggle hotkey: F11\r\n"
@@ -53,11 +52,7 @@ using CreateDeviceFn = HRESULT (WINAPI*)(IDirect3D9* self, UINT adapter,
                                          IDirect3DDevice9** device);
 using ResetFn = HRESULT (WINAPI*)(IDirect3DDevice9* self,
                                   D3DPRESENT_PARAMETERS* params);
-using PresentFn = HRESULT (WINAPI*)(IDirect3DDevice9* self,
-                                    const RECT* sourceRect,
-                                    const RECT* destRect,
-                                    HWND destWindowOverride,
-                                    const RGNDATA* dirtyRegion);
+using ShowRasterFn = void (__cdecl*)(void* camera);
 using ApplyVideoModeFn = int (__cdecl*)(void* arg1, void* arg2, void* arg3);
 HMODULE g_module = nullptr;
 bool g_logEnabled = false;
@@ -72,6 +67,7 @@ CRITICAL_SECTION g_logLock;
 bool g_logLockInitialized = false;
 
 void Log(const char* format, ...);
+bool BytesMatch(const void* address, const unsigned char* expected, size_t size);
 
 bool BuildSiblingPath(const wchar_t* extension, wchar_t* path, DWORD pathSize) {
     DWORD length = GetModuleFileNameW(g_module, path, pathSize);
@@ -196,7 +192,7 @@ using SetCursorPosFn = BOOL (WINAPI*)(int x, int y);
 Direct3DCreate9Fn g_originalDirect3DCreate9 = nullptr;
 CreateDeviceFn g_originalCreateDevice = nullptr;
 ResetFn g_originalReset = nullptr;
-PresentFn g_originalPresent = nullptr;
+ShowRasterFn g_originalShowRaster = nullptr;
 ApplyVideoModeFn g_originalApplyVideoMode = nullptr;
 SetCursorPosFn g_originalSetCursorPos = nullptr;
 
@@ -594,8 +590,6 @@ LRESULT CALLBACK GameWndProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
                     // foreground after the short verification interval.
                     ScheduleBackgroundRestoreCheck(window,
                                                    "WM_ACTIVATE active");
-                } else {
-                    RequireNextReset("WM_ACTIVATE active");
                 }
             } else {
                 MinimizeForShowDesktop(window, "WM_ACTIVATE inactive");
@@ -609,8 +603,6 @@ LRESULT CALLBACK GameWndProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
                 if (g_windowPutAway) {
                     ScheduleBackgroundRestoreCheck(window,
                                                    "WM_ACTIVATEAPP active");
-                } else {
-                    RequireNextReset("WM_ACTIVATEAPP active");
                 }
             } else {
                 MinimizeForShowDesktop(window, "WM_ACTIVATEAPP inactive");
@@ -643,7 +635,6 @@ LRESULT CALLBACK GameWndProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
                                                "WM_SIZE restored");
             } else {
                 g_windowPutAway = false;
-                RequireNextReset("WM_SIZE restored/resized");
                 if (g_borderlessPending) {
                     ApplyBorderlessStyle(window);
                 }
@@ -746,7 +737,6 @@ LRESULT CALLBACK GameWndProc(HWND window, UINT message, WPARAM wParam, LPARAM lP
                 } else {
                     g_windowPutAway = false;
                     Log("background restore accepted: game owns foreground");
-                    RequireNextReset("verified foreground restore");
                     if (g_borderlessPending &&
                         !IsIconic(window)) {
                         ApplyBorderlessStyle(window);
@@ -1249,50 +1239,70 @@ void DrawFpsOverlay(IDirect3DDevice9* device, unsigned fps) {
     }
 }
 
-HRESULT WINAPI HookedPresent(IDirect3DDevice9* device,
-                             const RECT* sourceRect,
-                             const RECT* destRect,
-                             HWND destWindowOverride,
-                             const RGNDATA* dirtyRegion) {
+void __cdecl HookedShowRaster(void* camera) {
     static ULONGLONG sampleStart = 0;
-    static unsigned sampleFrames = 0;
+    static DWORD sampleStartFrame = 0;
     static unsigned measuredFps = 0;
 
-    const ULONGLONG now = GetTickCount64();
-    if (!sampleStart) {
-        sampleStart = now;
-    }
-    ++sampleFrames;
-    const ULONGLONG elapsed = now - sampleStart;
-    if (elapsed >= 500) {
-        measuredFps = static_cast<unsigned>(
-            (static_cast<ULONGLONG>(sampleFrames) * 1000 + elapsed / 2) /
-            elapsed);
-        sampleStart = now;
-        sampleFrames = 0;
+    __try {
+        // GTA advances this counter once per game frame. Reading it here keeps
+        // the FPS overlay on GTA's final frame-output path instead of
+        // intercepting D3D9 Present, which must remain untouched for
+        // third-party overlays. Drawing immediately before ShowRaster also
+        // keeps the counter above every HUD element rendered by GTA and SA-MP.
+        const DWORD gameFrame = *reinterpret_cast<DWORD*>(0x00B7CB4C);
+        const ULONGLONG now = GetTickCount64();
+        if (!sampleStart) {
+            sampleStart = now;
+            sampleStartFrame = gameFrame;
+        }
+        const ULONGLONG elapsed = now - sampleStart;
+        if (elapsed >= 500) {
+            const DWORD elapsedFrames = gameFrame - sampleStartFrame;
+            measuredFps = static_cast<unsigned>(
+                (static_cast<ULONGLONG>(elapsedFrames) * 1000 +
+                 elapsed / 2) / elapsed);
+            sampleStart = now;
+            sampleStartFrame = gameFrame;
+        }
+
+        IDirect3DDevice9* device =
+            *reinterpret_cast<IDirect3DDevice9**>(0x00C97C28);
+        DrawFpsOverlay(device, measuredFps);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
 
-    DrawFpsOverlay(device, measuredFps);
-    return g_originalPresent(device, sourceRect, destRect,
-                             destWindowOverride, dirtyRegion);
+    g_originalShowRaster(camera);
 }
 
-void HookDevicePresent(IDirect3DDevice9* device) {
-    if (g_originalPresent || !device) {
-        Log("present hook skipped: existing=%d device=0x%p",
-            g_originalPresent ? 1 : 0, device);
+void HookFrameOutput() {
+    if (g_originalShowRaster) {
+        Log("ShowRaster hook skipped: already installed");
         return;
     }
 
-    void** vtable = *reinterpret_cast<void***>(device);
-    void* target = vtable[kVtablePresent];
-    MH_STATUS create = MH_CreateHook(target, reinterpret_cast<void*>(&HookedPresent),
-                                     reinterpret_cast<void**>(&g_originalPresent));
+    if (reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr)) != 0x00400000) {
+        Log("ShowRaster hook skipped: module base is not 0x00400000");
+        return;
+    }
+
+    void* target = reinterpret_cast<void*>(0x00745240);
+    const unsigned char expected[] = {
+        0xA0, 0x94, 0x67, 0xBA, 0x00, 0x84, 0xC0
+    };
+    if (!BytesMatch(target, expected, sizeof(expected))) {
+        Log("ShowRaster hook skipped: signature mismatch at 0x00745240");
+        return;
+    }
+
+    MH_STATUS create = MH_CreateHook(
+        target, reinterpret_cast<void*>(&HookedShowRaster),
+        reinterpret_cast<void**>(&g_originalShowRaster));
     MH_STATUS enable = create == MH_OK ? MH_EnableHook(target) : create;
-    Log("present hook: target=0x%p create=%d enable=%d original=0x%p",
-        target, create, enable, reinterpret_cast<void*>(g_originalPresent));
+    Log("ShowRaster hook: target=0x%p create=%d enable=%d original=0x%p",
+        target, create, enable, reinterpret_cast<void*>(g_originalShowRaster));
     if (create != MH_OK || enable != MH_OK) {
-        g_originalPresent = nullptr;
+        g_originalShowRaster = nullptr;
     }
 }
 
@@ -1322,7 +1332,6 @@ void AfterCreateDevice(IDirect3DDevice9* device,
                        ConvertMode mode) {
     __try {
         HookDeviceReset(device);
-        HookDevicePresent(device);
 
         HWND window = GetDeviceWindow(device, params, focusWindow);
         Log("after CreateDevice: device=0x%p window=0x%p focus=0x%p mode=%s",
@@ -2327,6 +2336,7 @@ DWORD WINAPI Initialize(LPVOID) {
     CaptureDesktopMode();
     UpdateGameRefreshRate();
     HookApplyVideoMode();
+    HookFrameOutput();
     HookChangeDisplaySettings();
 
     HMODULE d3d9 = LoadLibraryW(L"d3d9.dll");
