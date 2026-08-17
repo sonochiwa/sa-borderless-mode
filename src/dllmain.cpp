@@ -1,6 +1,7 @@
 #include <windows.h>
 #include <d3d9.h>
 #include <intrin.h>
+#include <tlhelp32.h>
 
 #include <cstdarg>
 #include <cstdio>
@@ -22,7 +23,7 @@ const wchar_t kOlderLegacyIniSection[] = L"SABorderless";
 // stop misdetecting the short file as UTF-16 mojibake ("Chinese" text).
 const wchar_t kDefaultIni[] =
     L"\xFEFF"
-    L"# BorderlessMode v1.4.2\r\n"
+    L"# BorderlessMode v1.5.0\r\n"
     L"# Created by sonochiwa\r\n"
     L"# Source code: https://github.com/sonochiwa/sa-borderless-mode\r\n"
     L"# Default FPS toggle hotkey: F11\r\n"
@@ -65,6 +66,10 @@ volatile LONG g_fpsHotkeyPressConsumed = 0;
 HANDLE g_logFile = INVALID_HANDLE_VALUE;
 CRITICAL_SECTION g_logLock;
 bool g_logLockInitialized = false;
+// Set before anything is torn down. The hooks installed by this plugin stay
+// live for the whole life of the process, so they can still be entered while
+// the process is shutting down.
+volatile LONG g_shuttingDown = 0;
 
 void Log(const char* format, ...);
 bool BytesMatch(const void* address, const unsigned char* expected, size_t size);
@@ -101,16 +106,9 @@ void LogOpen() {
     }
 }
 
-void LogClose() {
-    if (g_logFile != INVALID_HANDLE_VALUE) {
-        Log("log closing");
-        CloseHandle(g_logFile);
-        g_logFile = INVALID_HANDLE_VALUE;
-    }
-}
-
 void Log(const char* format, ...) {
-    if (g_logFile == INVALID_HANDLE_VALUE || !g_logLockInitialized) {
+    if (g_shuttingDown || g_logFile == INVALID_HANDLE_VALUE ||
+        !g_logLockInitialized) {
         return;
     }
 
@@ -1109,7 +1107,17 @@ ConvertMode ConvertPresentParams(const D3DPRESENT_PARAMETERS* source,
     }
 }
 
+// Resolving an address to a module takes the loader lock. This runs from
+// hooks on user32/d3d9 exports, which arbitrary threads reach - including
+// threads that are already inside the loader initializing a DLL. Taking the
+// loader lock there can deadlock the process, so the lookup only happens
+// while diagnostics are actually being written.
 void FormatCallerAddress(void* address, char* buffer, size_t size) {
+    if (g_logFile == INVALID_HANDLE_VALUE) {
+        std::snprintf(buffer, size, "0x%p", address);
+        return;
+    }
+
     HMODULE module = nullptr;
     if (address &&
         GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
@@ -1331,6 +1339,9 @@ void AfterCreateDevice(IDirect3DDevice9* device,
                        HWND focusWindow,
                        ConvertMode mode) {
     __try {
+        // First safe point on the game thread: the video mode has been chosen
+        // and the patched function is not on the stack here.
+        ApplyNoFrameDelay();
         HookDeviceReset(device);
 
         HWND window = GetDeviceWindow(device, params, focusWindow);
@@ -1528,25 +1539,94 @@ bool BytesMatch(const void* address, const unsigned char* expected, size_t size)
     }
 }
 
-bool WriteGameCode(void* address, const unsigned char* bytes, size_t size) {
-    DWORD oldProtect = 0;
-    if (!VirtualProtect(address, size, PAGE_EXECUTE_READWRITE, &oldProtect)) {
+constexpr size_t kMaxFrozenThreads = 256;
+
+struct ThreadFreeze {
+    HANDLE handles[kMaxFrozenThreads];
+    size_t count;
+};
+
+// Suspends every other thread in this process. Nothing between the freeze and
+// the matching resume may log, allocate or touch the loader: a suspended
+// thread can be holding the log lock, a heap lock or the loader lock, and
+// waiting on any of them here deadlocks the process.
+bool FreezeOtherThreads(ThreadFreeze* freeze) {
+    freeze->count = 0;
+
+    const DWORD ourThread = GetCurrentThreadId();
+    const DWORD ourProcess = GetCurrentProcessId();
+
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) {
         return false;
     }
-    bool ok = true;
-    __try {
-        std::memcpy(address, bytes, size);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        ok = false;
+
+    THREADENTRY32 entry = {};
+    entry.dwSize = sizeof(entry);
+    if (Thread32First(snapshot, &entry)) {
+        do {
+            if (entry.dwSize < FIELD_OFFSET(THREADENTRY32, th32OwnerProcessID) +
+                                   sizeof(entry.th32OwnerProcessID)) {
+                continue;
+            }
+            if (entry.th32OwnerProcessID != ourProcess ||
+                entry.th32ThreadID == ourThread) {
+                continue;
+            }
+            if (freeze->count >= kMaxFrozenThreads) {
+                break;
+            }
+            HANDLE thread = OpenThread(
+                THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT, FALSE,
+                entry.th32ThreadID);
+            if (!thread) {
+                continue;
+            }
+            if (SuspendThread(thread) == static_cast<DWORD>(-1)) {
+                CloseHandle(thread);
+                continue;
+            }
+            freeze->handles[freeze->count++] = thread;
+        } while (Thread32Next(snapshot, &entry));
     }
-    DWORD ignored = 0;
-    VirtualProtect(address, size, oldProtect, &ignored);
-    if (ok) {
-        FlushInstructionCache(GetCurrentProcess(), address, size);
-    }
-    return ok;
+
+    CloseHandle(snapshot);
+    return true;
 }
 
+void ResumeOtherThreads(ThreadFreeze* freeze) {
+    for (size_t i = 0; i < freeze->count; ++i) {
+        ResumeThread(freeze->handles[i]);
+        CloseHandle(freeze->handles[i]);
+    }
+    freeze->count = 0;
+}
+
+// True while any frozen thread is stopped inside the code being rewritten.
+// Patching underneath it would resume it into a half-rewritten function.
+bool AnyThreadInRange(const ThreadFreeze* freeze, uintptr_t begin,
+                      uintptr_t end) {
+    for (size_t i = 0; i < freeze->count; ++i) {
+        CONTEXT context = {};
+        context.ContextFlags = CONTEXT_CONTROL;
+        if (!GetThreadContext(freeze->handles[i], &context)) {
+            // An unreadable context is treated as "possibly inside".
+            return true;
+        }
+        uintptr_t ip = static_cast<uintptr_t>(context.Eip);
+        if (ip >= begin && ip < end) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// The three sites are only meaningful together: the first turns a call into a
+// short jump over a block, the last removes the matching `pop esi`. A thread
+// that executes the function while only part of the set has landed runs with
+// an unbalanced stack and takes the process down - which is why the whole set
+// is written in one pass with every other thread stopped, rather than as
+// three independent writes.
 void ApplyNoFrameDelay() {
     if (reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr)) != 0x00400000) {
         Log("NoFrameDelay skipped: module base is not 0x00400000");
@@ -1564,28 +1644,78 @@ void ApplyNoFrameDelay() {
         { 0x0053E99F, { 0x14, 0x00 }, { 0x10, 0x00 }, 1 },
         { 0x0053E9A5, { 0x5E, 0x00 }, { 0x90, 0x00 }, 1 },
     };
+    constexpr size_t kPatchCount = sizeof(patches) / sizeof(patches[0]);
 
-    for (size_t i = 0; i < sizeof(patches) / sizeof(patches[0]); ++i) {
+    // The patched region, used both for the page protection and for the
+    // instruction-pointer check below.
+    constexpr uintptr_t kRangeBegin = 0x0053E923;
+    constexpr uintptr_t kRangeEnd = 0x0053E9A6;
+    constexpr SIZE_T kRangeSize = kRangeEnd - kRangeBegin;
+
+    size_t alreadyPatched = 0;
+    for (size_t i = 0; i < kPatchCount; ++i) {
         const Patch& p = patches[i];
         const void* addr = reinterpret_cast<const void*>(p.addr);
-        if (!BytesMatch(addr, p.original, p.size) && !BytesMatch(addr, p.patched, p.size)) {
+        if (BytesMatch(addr, p.patched, p.size)) {
+            ++alreadyPatched;
+            continue;
+        }
+        if (!BytesMatch(addr, p.original, p.size)) {
             Log("NoFrameDelay skipped: signature mismatch at 0x%08lX", p.addr);
             return;
         }
     }
 
-    for (size_t i = 0; i < sizeof(patches) / sizeof(patches[0]); ++i) {
-        const Patch& p = patches[i];
-        void* addr = reinterpret_cast<void*>(p.addr);
-        if (BytesMatch(addr, p.patched, p.size)) {
-            Log("NoFrameDelay already patched at 0x%08lX", p.addr);
-            continue;
+    if (alreadyPatched == kPatchCount) {
+        return;
+    }
+
+    void* rangeBase = reinterpret_cast<void*>(kRangeBegin);
+    DWORD oldProtect = 0;
+    if (!VirtualProtect(rangeBase, kRangeSize, PAGE_EXECUTE_READWRITE,
+                        &oldProtect)) {
+        Log("NoFrameDelay failed: VirtualProtect error=%lu", GetLastError());
+        return;
+    }
+
+    ThreadFreeze freeze = {};
+    const bool frozen = FreezeOtherThreads(&freeze);
+    const bool blocked =
+        frozen && AnyThreadInRange(&freeze, kRangeBegin, kRangeEnd);
+    bool wrote = false;
+
+    if (!blocked) {
+        __try {
+            for (size_t i = 0; i < kPatchCount; ++i) {
+                std::memcpy(reinterpret_cast<void*>(patches[i].addr),
+                            patches[i].patched, patches[i].size);
+            }
+            wrote = true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            wrote = false;
         }
-        if (!WriteGameCode(addr, p.patched, p.size)) {
-            Log("NoFrameDelay failed to patch 0x%08lX", p.addr);
-            return;
-        }
-        Log("NoFrameDelay patched 0x%08lX", p.addr);
+    }
+
+    const size_t frozenCount = freeze.count;
+    ResumeOtherThreads(&freeze);
+
+    DWORD ignored = 0;
+    VirtualProtect(rangeBase, kRangeSize, oldProtect, &ignored);
+    if (wrote) {
+        FlushInstructionCache(GetCurrentProcess(), rangeBase, kRangeSize);
+    }
+
+    // Logging is only safe once every thread is running again.
+    if (wrote) {
+        Log("NoFrameDelay patched: sites=%u frozen=%u threads=%u",
+            static_cast<unsigned>(kPatchCount - alreadyPatched),
+            frozen ? 1u : 0u, static_cast<unsigned>(frozenCount));
+    } else if (blocked) {
+        // A later call retries; the game is left running unpatched meanwhile,
+        // which is correct behaviour rather than a half-applied patch.
+        Log("NoFrameDelay deferred: a thread is executing the patch range");
+    } else {
+        Log("NoFrameDelay failed: write raised an exception");
     }
 }
 
@@ -2332,7 +2462,11 @@ DWORD WINAPI Initialize(LPVOID) {
     }
     Log("MinHook initialized: status=%d", status);
 
-    ApplyNoFrameDelay();
+    // NoFrameDelay is deliberately not applied here. This runs on a thread
+    // spawned from DllMain, in parallel with the game's own startup, so the
+    // patch target may be executing. It is applied from the ApplyVideoMode
+    // and CreateDevice hooks instead, both of which run on the game thread at
+    // a point where the patched function is not on any stack.
     CaptureDesktopMode();
     UpdateGameRefreshRate();
     HookApplyVideoMode();
@@ -2362,7 +2496,17 @@ DWORD WINAPI Initialize(LPVOID) {
         : create;
     Log("Direct3DCreate9 hook: create=%d enable=%d original=0x%p",
         create, enable, reinterpret_cast<void*>(g_originalDirect3DCreate9));
-    TryHookCreateDeviceThroughTemporaryObject(createD3D9);
+    if (create != MH_OK || enable != MH_OK) {
+        // Only worth the risk when the export hook is unavailable. Creating a
+        // D3D9 object here means running the display-driver and AppCompat
+        // (DWM8And16BitMitigation) initialization paths on this thread while
+        // the game thread may be running the very same code, and releasing
+        // the object can unload the driver DLL underneath it. With the export
+        // hook in place every future Direct3DCreate9 comes through us anyway.
+        Log("Direct3DCreate9 hook unavailable: falling back to a temporary "
+            "D3D9 object");
+        TryHookCreateDeviceThroughTemporaryObject(createD3D9);
+    }
     HookSetCursorPos();
     HookKeyStateApis();
     HookMessagePump();
@@ -2371,17 +2515,33 @@ DWORD WINAPI Initialize(LPVOID) {
 
 }
 
+// This plugin patches user32 and d3d9 exports, subclasses the game window and
+// registers a WH_GETMESSAGE hook, none of which can be withdrawn safely from
+// DllMain. Pinning the module makes a FreeLibrary on it a no-op, so those
+// hooks can never point into unmapped memory. It is the same protection the
+// Windows compatibility engine applies as the IgnoreFreeLibrary shim, done
+// deliberately instead of waiting for Windows to diagnose a crash first.
+void PinSelf() {
+    HMODULE pinned = nullptr;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN |
+                           GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                       reinterpret_cast<LPCWSTR>(&PinSelf), &pinned);
+}
+
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_DETACH) {
-        Log("process detach");
+        // Shutdown ordering matters here. The hooks are still installed and
+        // other threads can be inside them, so nothing they depend on may be
+        // destroyed: a thread that passed the guard in Log() a moment ago is
+        // about to enter g_logLock. Destroying the critical section here made
+        // Rtl*CriticalSection raise STATUS_INVALID_PARAMETER (0xC000000D) and
+        // took the process down on the way out. The flag stops new work; the
+        // lock and the log handle are deliberately left for the OS to reclaim
+        // at process exit.
+        InterlockedExchange(&g_shuttingDown, 1);
         if (g_getMessageHook) {
             UnhookWindowsHookEx(g_getMessageHook);
             g_getMessageHook = nullptr;
-        }
-        LogClose();
-        if (g_logLockInitialized) {
-            DeleteCriticalSection(&g_logLock);
-            g_logLockInitialized = false;
         }
         return TRUE;
     }
@@ -2392,6 +2552,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
 
     g_module = instance;
     DisableThreadLibraryCalls(instance);
+    PinSelf();
 
     InitializeCriticalSection(&g_logLock);
     g_logLockInitialized = true;

@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.5.0 - 2026-08-17
+
+- Fixed the game closing by itself right after launch. On a newly assembled
+  build the game could flash on screen for an instant and disappear, and
+  whether it started at all felt random: turning borderless mode off, starting
+  the game once, and turning it back on would often work around it for a
+  while. This no longer happens.
+- Fixed a crash when quitting. Closing the game could end with an error and a
+  Windows crash report instead of a clean exit.
+- Made starting up more dependable in general. Part of the plugin's setup used
+  to run while the game was still loading, where it could get in the way of
+  the game itself and of the graphics driver. It now waits for a safe moment.
+
 ## v1.4.2 - 2026-08-01
 
 - Fixed NVIDIA Overlay disappearing or opening with only the Windows cursor
