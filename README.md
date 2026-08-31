@@ -17,7 +17,7 @@ Windows SDK, and MinHook sources vendored in `vendor\minhook`.
 - Keeps working after alt-tab and in-game video setting changes by also handling
   `IDirect3DDevice9::Reset`.
 - Leaves already-windowed setups alone and only removes the vsync wait.
-- Press **F11** to show or hide GTA's actual in-game FPS.
+- Press **Alt+F11** to show or hide GTA's actual in-game FPS.
 - Blocks **Alt+Enter** so the game cannot accidentally leave borderless mode.
 - Hides the TAB press of Alt+Tab from the game, so the SA:MP scoreboard no
   longer gets stuck open after switching back.
@@ -50,7 +50,7 @@ Edit `BorderlessMode.ini` and restart the game.
 # BorderlessMode v1.5.0
 # Created by sonochiwa
 # Source code: https://github.com/sonochiwa/sa-borderless-mode
-# Default FPS toggle hotkey: F11
+# Default FPS toggle hotkey: Alt + F11
 
 [general]
 log=0
@@ -60,7 +60,9 @@ log=0
 [fpsCounter]
 show=0
 hotkeyEnabled=1
-hotkeyModifier=0
+# Decimal Win32 virtual-key codes: 18 is Alt, 122 is F11.
+# Set hotkeyModifier=0 for a bare key with no modifier.
+hotkeyModifier=18
 hotkeyKey=122
 ```
 
@@ -69,7 +71,7 @@ hotkeyKey=122
 | `general` | `log` | `0` | `1` writes `BorderlessMode.log` next to the ASI for diagnostics. |
 | `fpsCounter` | `show` | `0` | Shows GTA's actual in-game FPS. Its value is saved whenever the counter is toggled in game. |
 | `fpsCounter` | `hotkeyEnabled` | `1` | Enables hotkey handling. Set to `0` to disable it without removing the key. |
-| `fpsCounter` | `hotkeyModifier` | `0` | Optional modifier as a decimal Win32 virtual-key code. `0` means no modifier. |
+| `fpsCounter` | `hotkeyModifier` | `18` | Modifier as a decimal Win32 virtual-key code. `18` is Alt; `0` means no modifier. |
 | `fpsCounter` | `hotkeyKey` | `122` | Main key as a decimal Win32 virtual-key code (`122` is F11). Removing the key or setting it to `0` disables hotkey handling. |
 
 > **Why the FPS counter is built in:** External programs, including NVIDIA
@@ -79,7 +81,8 @@ hotkeyKey=122
 > shows GTA's real in-game FPS, so it is the value to use when checking
 > performance.
 
-For example, use `hotkeyModifier=18` and `hotkeyKey=89` for **Alt + Y**.
+For example, use `hotkeyModifier=18` and `hotkeyKey=89` for **Alt + Y**, or
+`hotkeyModifier=0` and `hotkeyKey=122` for a bare **F11**.
 The main key is intercepted only while the configured modifier is held.
 
 The log is recreated on each game start. If the game hangs or shows a black

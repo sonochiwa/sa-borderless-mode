@@ -23,7 +23,7 @@ const wchar_t kDefaultIni[] =
     L"# BorderlessMode v" BM_VERSION_WIDE L"\r\n"
     L"# Created by sonochiwa\r\n"
     L"# Source code: https://github.com/sonochiwa/sa-borderless-mode\r\n"
-    L"# Default FPS toggle hotkey: F11\r\n"
+    L"# Default FPS toggle hotkey: Alt + F11\r\n"
     L"\r\n"
     L"[general]\r\n"
     L"log=0\r\n"
@@ -33,7 +33,9 @@ const wchar_t kDefaultIni[] =
     L"[fpsCounter]\r\n"
     L"show=0\r\n"
     L"hotkeyEnabled=1\r\n"
-    L"hotkeyModifier=0\r\n"
+    L"# Decimal Win32 virtual-key codes: 18 is Alt, 122 is F11.\r\n"
+    L"# Set hotkeyModifier=0 for a bare key with no modifier.\r\n"
+    L"hotkeyModifier=18\r\n"
     L"hotkeyKey=122\r\n";
 
 Config g_config;
@@ -198,7 +200,7 @@ void LoadConfig() {
                        L"FpsHotkeyEnabled", 1) != 0;
     g_config.fpsHotkeyModifier = static_cast<UINT>(
         ReadIntSetting(iniPath, kFpsCounterSection, L"hotkeyModifier",
-                       L"FpsHotkeyModifier", 0));
+                       L"FpsHotkeyModifier", VK_MENU));
     wchar_t fpsHotkeyKey[32] = {};
     ReadFpsHotkeyKey(
         iniPath, fpsHotkeyKey,

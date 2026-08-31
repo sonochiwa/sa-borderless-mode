@@ -7,7 +7,7 @@ namespace bm {
 struct Config {
     bool logEnabled = false;
     bool fpsHotkeyEnabled = true;
-    UINT fpsHotkeyModifier = 0;
+    UINT fpsHotkeyModifier = VK_MENU;  // Alt
     UINT fpsHotkeyKey = 0;
 
     // [debug] switches. All default to off, i.e. everything enabled. They
