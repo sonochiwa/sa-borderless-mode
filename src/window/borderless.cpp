@@ -67,6 +67,24 @@ void TakeForeground(HWND window) {
         foreground);
 }
 
+// The window is shown before the game has presented a single frame, so
+// whatever the window class erases its background with is what the screen
+// shows in the meantime. GTA registers its class with a white brush, which
+// flashes as bright rectangles in the corner of an otherwise black startup
+// screen. Black matches every loading screen the game draws next, so an
+// unpainted window simply is not visible.
+void PaintUnpaintedAreaBlack(HWND window) {
+    auto black = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
+    if (!black) {
+        return;
+    }
+    const ULONG_PTR previous = SetClassLongPtrW(
+        window, GCLP_HBRBACKGROUND, reinterpret_cast<LONG_PTR>(black));
+    Log("borderless background brush: window=0x%p previous=0x%p black=0x%p",
+        window, reinterpret_cast<void*>(previous),
+        reinterpret_cast<void*>(black));
+}
+
 }  // namespace
 
 bool GameOwnsForeground() {
@@ -147,10 +165,20 @@ void ApplyBorderlessStyle(HWND window) {
         return;
     }
 
+    if (firstApply) {
+        PaintUnpaintedAreaBlack(window);
+    }
+
     LONG style = GetWindowLongW(window, GWL_STYLE);
     LONG oldStyle = style;
     style &= ~kFrameStyleBits;
-    style |= WS_POPUP | WS_VISIBLE;
+    style |= WS_POPUP;
+    // Deliberately not WS_VISIBLE. Setting it on a still hidden window reveals
+    // the window at the geometry it currently has - the game's unpainted
+    // 640x480 startup window, in the corner of the screen - for every frame
+    // between here and the SetWindowPos below. Showing is left to
+    // SWP_SHOWWINDOW, once the final position and size are already in place.
+    style |= (oldStyle & WS_VISIBLE);
     SetWindowLongW(window, GWL_STYLE, style);
 
     LONG exStyle = GetWindowLongW(window, GWL_EXSTYLE);
