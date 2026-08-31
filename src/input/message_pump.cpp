@@ -1,5 +1,6 @@
 #include "input/message_pump.h"
 
+#include "core/config.h"
 #include "core/hook.h"
 #include "core/log.h"
 #include "core/module.h"
@@ -98,6 +99,10 @@ LRESULT CALLBACK GetMsgHookProc(int code, WPARAM wParam, LPARAM lParam) {
 }  // namespace
 
 void HookMessagePump() {
+    if (GetConfig().disableMessagePump) {
+        Log("message pump filter disabled by config");
+        return;
+    }
     HMODULE user32 = GetModuleHandleW(L"user32.dll");
     if (!user32) {
         return;
@@ -117,6 +122,9 @@ void HookMessagePump() {
 }
 
 void InstallGetMessageHook(HWND window) {
+    if (GetConfig().disableMessagePump) {
+        return;
+    }
     if (g_getMessageHook || !window || !IsWindow(window)) {
         return;
     }

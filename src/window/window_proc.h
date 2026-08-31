@@ -9,4 +9,9 @@ namespace bm {
 // keyboard fallout - is handled there.
 void InstallWindowHook(HWND window);
 
+// Starts retrying the borderless geometry until the game has shown its own
+// window. Used when ApplyBorderlessStyle deferred because the window was not
+// on screen yet.
+void ScheduleBorderlessRetry(HWND window);
+
 }  // namespace bm

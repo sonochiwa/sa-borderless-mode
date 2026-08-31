@@ -64,8 +64,12 @@ void HookDeviceReset(IDirect3DDevice9* device) {
     }
 
     void** vtable = *reinterpret_cast<void***>(device);
-    InstallHook(vtable[kVtableReset], reinterpret_cast<void*>(&HookedReset),
-                reinterpret_cast<void**>(&g_originalReset), "Reset");
+    if (InstallHook(vtable[kVtableReset], reinterpret_cast<void*>(&HookedReset),
+                    reinterpret_cast<void**>(&g_originalReset), "Reset")) {
+        // Installed from the game thread once the device exists: the very next
+        // Reset must already go through us, so it cannot wait for a batch.
+        ApplyQueuedHooks();
+    }
 }
 
 void AfterCreateDevice(IDirect3DDevice9* device,
@@ -86,6 +90,11 @@ void AfterCreateDevice(IDirect3DDevice9* device,
         InstallGetMessageHook(window);
         if (mode == ConvertFullscreen) {
             ApplyBorderlessStyle(window);
+            if (BorderlessPending()) {
+                // The game has not shown its window yet. Wait for it rather
+                // than forcing it on screen from inside CreateDevice.
+                ScheduleBorderlessRetry(window);
+            }
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         Log("after CreateDevice failed with exception");
@@ -253,7 +262,10 @@ void HookCreateDevice(IDirect3D9* d3d) {
         if (InstallHook(vtable[kVtableCreateDevice],
                         reinterpret_cast<void*>(&HookedCreateDevice),
                         reinterpret_cast<void**>(&g_originalCreateDevice),
-                        "CreateDevice")) {
+                        "CreateDevice") &&
+            ApplyQueuedHooks()) {
+            // The game creates its device immediately after Direct3DCreate9
+            // returns, so this one cannot wait for a batch either.
             return;
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -293,12 +305,22 @@ void RequireNextReset(const char* reason) {
 }
 
 void InstallD3D9Hooks() {
-    HMODULE d3d9 = LoadLibraryW(L"d3d9.dll");
+    // The game imports d3d9.dll statically, so by the time this runs it is
+    // already loaded. Take the handle instead of calling LoadLibrary: many
+    // modpacks ship a proxy d3d9.dll of their own (ENB, mod_sa and friends),
+    // and there is no reason for this plugin to add a reference to it, let
+    // alone force one to load that the game itself never asked for.
+    HMODULE d3d9 = GetModuleHandleW(L"d3d9.dll");
     if (!d3d9) {
-        Log("d3d9 LoadLibrary failed: error=%lu", GetLastError());
-        return;
+        d3d9 = LoadLibraryW(L"d3d9.dll");
+        if (!d3d9) {
+            Log("d3d9 LoadLibrary failed: error=%lu", GetLastError());
+            return;
+        }
+        Log("d3d9 loaded on demand: module=0x%p", d3d9);
+    } else {
+        Log("d3d9 already loaded: module=0x%p", d3d9);
     }
-    Log("d3d9 loaded: module=0x%p", d3d9);
 
     auto createD3D9 = reinterpret_cast<Direct3DCreate9Fn>(
         GetProcAddress(d3d9, "Direct3DCreate9"));

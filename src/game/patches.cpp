@@ -1,5 +1,6 @@
 #include "game/patches.h"
 
+#include "core/config.h"
 #include "core/hook.h"
 #include "core/log.h"
 #include "core/memory.h"
@@ -43,6 +44,9 @@ int __cdecl HookedApplyVideoMode(void* arg1, void* arg2, void* arg3) {
 }  // namespace
 
 void ApplyNoFrameDelay() {
+    if (GetConfig().disableGamePatches) {
+        return;
+    }
     if (!game::IsSupportedExecutable()) {
         Log("NoFrameDelay skipped: module base is not 0x00400000");
         return;
@@ -81,6 +85,9 @@ void ApplyNoFrameDelay() {
 }
 
 bool UpdateGameRefreshRate() {
+    if (GetConfig().disableGamePatches) {
+        return false;
+    }
     if (!game::IsSupportedExecutable()) {
         Log("RefreshRateFix skipped: module base is not 0x00400000");
         return false;
@@ -107,6 +114,9 @@ bool UpdateGameRefreshRate() {
 }
 
 void HookApplyVideoMode() {
+    if (GetConfig().disableGamePatches) {
+        return;
+    }
     if (!game::IsSupportedExecutable()) {
         Log("RefreshRateFix hook skipped: module base is not 0x00400000");
         return;

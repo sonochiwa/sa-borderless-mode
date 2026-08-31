@@ -1,5 +1,6 @@
 #include "d3d9/present_params.h"
 
+#include "core/config.h"
 #include "core/log.h"
 
 namespace bm {
@@ -78,6 +79,9 @@ void LogPresentParams(const char* label, const D3DPRESENT_PARAMETERS* params) {
 
 ConvertMode ConvertPresentParams(const D3DPRESENT_PARAMETERS* source,
                                  D3DPRESENT_PARAMETERS* converted) {
+    if (GetConfig().disableConversion) {
+        return ConvertNone;
+    }
     __try {
         if (!source) {
             Log("convert skipped: params=null");

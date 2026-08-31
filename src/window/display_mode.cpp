@@ -1,5 +1,6 @@
 #include "window/display_mode.h"
 
+#include "core/config.h"
 #include "core/hook.h"
 #include "core/log.h"
 #include "window/borderless.h"
@@ -206,6 +207,10 @@ void RestoreDesktopMode(const char* reason) {
 }
 
 void HookChangeDisplaySettings() {
+    if (GetConfig().disableDisplayGuard) {
+        Log("display guard disabled by config");
+        return;
+    }
     HMODULE user32 = GetModuleHandleW(L"user32.dll");
     if (!user32) {
         return;

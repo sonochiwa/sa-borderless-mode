@@ -19,6 +19,12 @@ volatile LONG g_fpsHotkeyPressConsumed = 0;
 constexpr UINT_PTR kBackgroundRestoreTimerId = 0xB0DE1E56;
 constexpr UINT kBackgroundRestoreDelayMs = 100;
 
+// Retries the borderless geometry until the game has shown its own window.
+constexpr UINT_PTR kBorderlessRetryTimerId = 0xB0DE1E57;
+constexpr UINT kBorderlessRetryDelayMs = 250;
+constexpr int kBorderlessRetryLimit = 40;  // ~10 s, then give up quietly
+int g_borderlessRetries = 0;
+
 LRESULT ForwardToGame(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
     if (!g_previousWndProc) {
         return DefWindowProcW(window, message, wParam, lParam);
@@ -126,6 +132,30 @@ void LogWindowMessage(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
                 window, static_cast<unsigned>(wParam & 0xFFF0),
                 IsIconic(window) ? 1 : 0);
             break;
+        // Shutdown messages. Without these the log simply stops when the game
+        // goes away, which cannot be told apart from being killed outright.
+        case WM_CLOSE:
+            Log("wnd WM_CLOSE window=0x%p foreground=0x%p",
+                window, GetForegroundWindow());
+            break;
+        case WM_DESTROY:
+            Log("wnd WM_DESTROY window=0x%p", window);
+            break;
+        case WM_NCDESTROY:
+            Log("wnd WM_NCDESTROY window=0x%p", window);
+            break;
+        case WM_QUIT:
+            Log("wnd WM_QUIT window=0x%p exitCode=%u",
+                window, static_cast<unsigned>(wParam));
+            break;
+        case WM_QUERYENDSESSION:
+            Log("wnd WM_QUERYENDSESSION window=0x%p lParam=0x%p",
+                window, reinterpret_cast<void*>(lParam));
+            break;
+        case WM_ENDSESSION:
+            Log("wnd WM_ENDSESSION window=0x%p ending=%u",
+                window, static_cast<unsigned>(wParam));
+            break;
         case WM_WINDOWPOSCHANGING:
             // The single choke point every geometry, Z-order and visibility
             // change passes through, including changes started from another
@@ -210,10 +240,32 @@ void HandleShowStateMessage(HWND window, UINT message, WPARAM wParam) {
                 Log("window put away: hidden");
             } else if (wParam && WindowPutAway()) {
                 ScheduleBackgroundRestoreCheck(window, "WM_SHOWWINDOW shown");
+            } else if (wParam && BorderlessPending()) {
+                // The game is showing its window for the first time; the
+                // geometry deferred during CreateDevice can go on now.
+                ScheduleBorderlessRetry(window);
             }
             break;
         default:
             break;
+    }
+}
+
+void HandleBorderlessRetryTimer(HWND window) {
+    if (!BorderlessPending() || BorderlessApplied()) {
+        KillTimer(window, kBorderlessRetryTimerId);
+        return;
+    }
+    if (++g_borderlessRetries > kBorderlessRetryLimit) {
+        KillTimer(window, kBorderlessRetryTimerId);
+        Log("borderless retry gave up after %d attempts", g_borderlessRetries);
+        return;
+    }
+    if (IsWindowVisible(window) && !IsIconic(window)) {
+        KillTimer(window, kBorderlessRetryTimerId);
+        Log("borderless retry: window is up after %d attempt(s)",
+            g_borderlessRetries);
+        ApplyBorderlessStyle(window);
     }
 }
 
@@ -361,7 +413,25 @@ LRESULT CALLBACK GameWndProc(HWND window, UINT message, WPARAM wParam,
                 HandleBackgroundRestoreTimer(window);
                 return 0;
             }
+            if (wParam == kBorderlessRetryTimerId) {
+                HandleBorderlessRetryTimer(window);
+                return 0;
+            }
             break;
+
+        case WM_NCDESTROY: {
+            // GTA destroys and rebuilds its window while it settles on a video
+            // mode. Let go of the subclass here, otherwise the next window is
+            // never hooked and g_previousWndProc points at a dead chain.
+            LRESULT result = ForwardToGame(window, message, wParam, lParam);
+            KillTimer(window, kBackgroundRestoreTimerId);
+            KillTimer(window, kBorderlessRetryTimerId);
+            g_previousWndProc = nullptr;
+            g_borderlessRetries = 0;
+            ResetBorderlessState();
+            Log("window hook released: window=0x%p", window);
+            return result;
+        }
 
         case WM_KEYDOWN:
         case WM_SYSKEYDOWN:
@@ -417,7 +487,21 @@ LRESULT CALLBACK GameWndProc(HWND window, UINT message, WPARAM wParam,
 
 }  // namespace
 
+void ScheduleBorderlessRetry(HWND window) {
+    if (!window || !IsWindow(window) || !BorderlessPending()) {
+        return;
+    }
+    g_borderlessRetries = 0;
+    SetTimer(window, kBorderlessRetryTimerId, kBorderlessRetryDelayMs, nullptr);
+    Log("borderless retry armed: window=0x%p visible=%d iconic=%d",
+        window, IsWindowVisible(window) ? 1 : 0, IsIconic(window) ? 1 : 0);
+}
+
 void InstallWindowHook(HWND window) {
+    if (GetConfig().disableWindowHook) {
+        Log("window hook disabled by config");
+        return;
+    }
     if (g_previousWndProc || !window || !IsWindow(window)) {
         Log("window hook skipped: existing=%d window=0x%p isWindow=%d",
             g_previousWndProc ? 1 : 0, window,

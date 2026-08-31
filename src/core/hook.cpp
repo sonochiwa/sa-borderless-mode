@@ -15,15 +15,21 @@ bool InstallHook(void* target, void* detour, void** original, const char* name) 
     }
 
     MH_STATUS create = MH_CreateHook(target, detour, original);
-    MH_STATUS enable = create == MH_OK ? MH_EnableHook(target) : create;
-    Log("%s hook: target=0x%p create=%d enable=%d original=0x%p",
-        name, target, create, enable, *original);
-    if (create == MH_OK && enable == MH_OK) {
+    MH_STATUS queue = create == MH_OK ? MH_QueueEnableHook(target) : create;
+    Log("%s hook: target=0x%p create=%d queue=%d original=0x%p",
+        name, target, create, queue, *original);
+    if (create == MH_OK && queue == MH_OK) {
         return true;
     }
 
     *original = nullptr;
     return false;
+}
+
+bool ApplyQueuedHooks() {
+    MH_STATUS status = MH_ApplyQueued();
+    Log("queued hooks applied: status=%d", status);
+    return status == MH_OK;
 }
 
 void* ResolveExportFromTable(HMODULE module, const char* name) {

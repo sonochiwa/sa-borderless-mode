@@ -1,5 +1,6 @@
 #include "window/borderless.h"
 
+#include "core/config.h"
 #include "core/log.h"
 
 namespace bm {
@@ -97,7 +98,18 @@ void SetWindowPutAway(bool putAway) {
     g_windowPutAway = putAway;
 }
 
+void ResetBorderlessState() {
+    g_borderlessApplied = false;
+    g_borderlessPending = false;
+    g_windowPutAway = false;
+    Log("borderless state reset");
+}
+
 void ApplyBorderlessStyle(HWND window) {
+    if (GetConfig().disableBorderlessStyle) {
+        Log("borderless style disabled by config");
+        return;
+    }
     if (!window || !IsWindow(window)) {
         Log("borderless skipped: invalid window=0x%p", window);
         return;
@@ -107,8 +119,11 @@ void ApplyBorderlessStyle(HWND window) {
     // borderless geometry here would pull the window back up behind whatever
     // the user switched to. The game keeps calling Reset while minimized, so
     // this path is hit as soon as anything re-arms the forwarded Reset. Wait
-    // for the window to come back instead. The very first application is
-    // exempt: that one has to show the window.
+    // for the window to come back instead.
+    //
+    // The very first application is exempt: that one has to show the window.
+    // Leaving it to the game was tried and does not work - GTA destroys its
+    // startup window either way, and without this the window never appears.
     const bool firstApply = !g_borderlessApplied;
     const bool iconic = IsIconic(window) != FALSE;
     const bool visible = IsWindowVisible(window) != FALSE;

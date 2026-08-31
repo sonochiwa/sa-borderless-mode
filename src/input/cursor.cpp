@@ -1,5 +1,6 @@
 #include "input/cursor.h"
 
+#include "core/config.h"
 #include "core/hook.h"
 #include "core/log.h"
 #include "window/borderless.h"
@@ -25,6 +26,10 @@ BOOL WINAPI HookedSetCursorPos(int x, int y) {
 }  // namespace
 
 void HookSetCursorPos() {
+    if (GetConfig().disableCursorGuard) {
+        Log("cursor guard disabled by config");
+        return;
+    }
     HMODULE user32 = GetModuleHandleW(L"user32.dll");
     if (!user32) {
         return;

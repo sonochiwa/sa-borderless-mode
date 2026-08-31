@@ -5,11 +5,13 @@
 #include "version.h"
 
 #include <cstdlib>
+#include <cwchar>
 
 namespace bm {
 namespace {
 
 const wchar_t kGeneralSection[] = L"general";
+const wchar_t kDebugSection[] = L"debug";
 const wchar_t kFpsCounterSection[] = L"fpsCounter";
 const wchar_t kLegacySection[] = L"BorderlessMode";
 const wchar_t kOlderLegacySection[] = L"SABorderless";
@@ -26,6 +28,11 @@ const wchar_t kDefaultIni[] =
     L"[general]\r\n"
     L"log=0\r\n"
     L"\r\n"
+    L"# Declares the game DPI aware. Required for borderless mode on a display\r\n"
+    L"# with scaling above 100%; without it Windows feeds the game a virtual\r\n"
+    L"# desktop and the game shuts itself down during startup.\r\n"
+    L"dpiAware=1\r\n"
+    L"\r\n"
     L"# Shows GTA's actual in-game FPS. External tools such as NVIDIA\r\n"
     L"# counters may show the window's refresh rate instead.\r\n"
     L"[fpsCounter]\r\n"
@@ -35,6 +42,7 @@ const wchar_t kDefaultIni[] =
     L"hotkeyKey=122\r\n";
 
 Config g_config;
+wchar_t g_iniPath[MAX_PATH] = {};
 volatile LONG g_showFpsOverlay = 0;
 
 bool BuildIniPath(wchar_t* path, DWORD pathSize) {
@@ -195,16 +203,44 @@ void LoadConfig() {
         ReadIntSetting(iniPath, kGeneralSection, L"log", L"Log", 0) != 0;
     LogSetEnabled(g_config.logEnabled);
 
-    Log("config loaded: ini=%ls Log=%d ShowFPS=%d "
-        "FpsHotkeyEnabled=%d FpsHotkeyModifier=0x%02X FpsHotkeyKey=0x%02X",
-        iniPath,
-        g_config.logEnabled ? 1 : 0,
-        g_showFpsOverlay ? 1 : 0, g_config.fpsHotkeyEnabled ? 1 : 0,
-        g_config.fpsHotkeyModifier, g_config.fpsHotkeyKey);
+    auto debugFlag = [&](const wchar_t* key) {
+        return GetPrivateProfileIntW(kDebugSection, key, 0, iniPath) != 0;
+    };
+    g_config.disableWindowHook = debugFlag(L"disableWindowHook");
+    g_config.disableInputFilters = debugFlag(L"disableInputFilters");
+    g_config.disableMessagePump = debugFlag(L"disableMessagePump");
+    g_config.disableCursorGuard = debugFlag(L"disableCursorGuard");
+    g_config.disableDisplayGuard = debugFlag(L"disableDisplayGuard");
+    g_config.disableGamePatches = debugFlag(L"disableGamePatches");
+    g_config.disableBorderlessStyle = debugFlag(L"disableBorderlessStyle");
+    g_config.disableConversion = debugFlag(L"disableConversion");
+    g_config.dpiAware =
+        GetPrivateProfileIntW(kGeneralSection, L"dpiAware", 1, iniPath) != 0;
+    wcscpy_s(g_iniPath, iniPath);
 }
 
 const Config& GetConfig() {
     return g_config;
+}
+
+void LogConfigSummary() {
+    Log("config loaded: ini=%ls Log=%d ShowFPS=%d "
+        "FpsHotkeyEnabled=%d FpsHotkeyModifier=0x%02X FpsHotkeyKey=0x%02X",
+        g_iniPath,
+        g_config.logEnabled ? 1 : 0,
+        ShowFpsOverlay() ? 1 : 0, g_config.fpsHotkeyEnabled ? 1 : 0,
+        g_config.fpsHotkeyModifier, g_config.fpsHotkeyKey);
+    Log("debug switches: window=%d input=%d pump=%d cursor=%d display=%d "
+        "patches=%d style=%d convert=%d dpiAware=%d",
+        g_config.disableWindowHook ? 1 : 0,
+        g_config.disableInputFilters ? 1 : 0,
+        g_config.disableMessagePump ? 1 : 0,
+        g_config.disableCursorGuard ? 1 : 0,
+        g_config.disableDisplayGuard ? 1 : 0,
+        g_config.disableGamePatches ? 1 : 0,
+        g_config.disableBorderlessStyle ? 1 : 0,
+        g_config.disableConversion ? 1 : 0,
+        g_config.dpiAware ? 1 : 0);
 }
 
 bool ShowFpsOverlay() {

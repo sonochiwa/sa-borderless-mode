@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Fixed the game closing itself a second after startup on a display with
+  scaling above 100%. This is the failure that looked random and unfixable: a
+  freshly assembled modpack in a new folder would not start, while the same
+  files in a folder that had been launched a few times were fine, and starting
+  the game once without the plugin appeared to repair it for good. The plugin
+  now tells Windows that the game understands display scaling, instead of
+  waiting for Windows to work it out on its own.
+- The borderless window now covers the whole screen on a scaled display. It
+  used to be sized as if the monitor were smaller - 2048x1152 on a 2560x1440
+  screen at 125%.
+- Added an optional `[debug]` section for turning parts of the plugin off when
+  tracking down a conflict, and a `dpiAware` setting under `[general]`.
 - Internal only, no behaviour changes: the single 2,500-line source file was
   split into modules (core, d3d9, window, input, game), every hard-coded game
   address moved into one header, and an unreachable leftover of the old

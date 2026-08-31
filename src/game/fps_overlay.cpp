@@ -148,6 +148,10 @@ void __cdecl HookedShowRaster(void* camera) {
 }  // namespace
 
 void HookFrameOutput() {
+    if (GetConfig().disableGamePatches) {
+        Log("game patches disabled by config");
+        return;
+    }
     if (g_originalShowRaster) {
         Log("ShowRaster hook skipped: already installed");
         return;

@@ -33,4 +33,9 @@ void SetBorderlessPending(bool pending);
 bool WindowPutAway();
 void SetWindowPutAway(bool putAway);
 
+// Called when the game destroys the window this state described. GTA tears
+// its window down and builds a new one while it settles on a video mode, and
+// the new one has to be treated as a fresh first application.
+void ResetBorderlessState();
+
 }  // namespace bm

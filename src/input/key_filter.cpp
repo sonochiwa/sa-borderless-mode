@@ -1,5 +1,6 @@
 #include "input/key_filter.h"
 
+#include "core/config.h"
 #include "core/hook.h"
 #include "core/log.h"
 #include "window/borderless.h"
@@ -201,6 +202,10 @@ void ClearMessageKeyMute(int virtualKey) {
 }
 
 void HookKeyStateApis() {
+    if (GetConfig().disableInputFilters) {
+        Log("input filters disabled by config");
+        return;
+    }
     HMODULE user32 = GetModuleHandleW(L"user32.dll");
     if (!user32) {
         return;

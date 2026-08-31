@@ -67,6 +67,7 @@ hotkeyKey=122
 | Section | Key | Default | Meaning |
 | ------- | --- | ------- | ------- |
 | `general` | `log` | `0` | `1` writes `BorderlessMode.log` next to the ASI for diagnostics. |
+| `general` | `dpiAware` | `1` | Declares the game DPI aware. Needed for borderless mode on a scaled display; see below. Only set it to `0` if it clashes with something else. |
 | `fpsCounter` | `show` | `0` | Shows GTA's actual in-game FPS. Its value is saved whenever the counter is toggled in game. |
 | `fpsCounter` | `hotkeyEnabled` | `1` | Enables hotkey handling. Set to `0` to disable it without removing the key. |
 | `fpsCounter` | `hotkeyModifier` | `0` | Optional modifier as a decimal Win32 virtual-key code. `0` means no modifier. |
@@ -84,6 +85,42 @@ The main key is intercepted only while the configured modifier is held.
 
 The log is recreated on each game start. If the game hangs or shows a black
 screen, close the process and send `BorderlessMode.log` from the GTA SA folder.
+
+### Display scaling
+
+GTA SA never tells Windows it understands display scaling. Above 100% scaling
+Windows therefore hands it a virtual desktop: on a 2560x1440 monitor at 125%
+the game believes the screen is 2048x1152. Exclusive fullscreen hides this, but
+a borderless window whose back buffer is the real monitor size on a virtual
+desktop makes the game shut itself down a second after startup.
+
+Windows works around this on its own, eventually, by recording a `HIGHDPIAWARE`
+compatibility layer for that particular `gta_sa.exe` path. That is why a freshly
+assembled modpack in a new folder could fail while the same files in a folder
+that had been launched a few times were fine, and why launching once without the
+plugin appeared to repair it. `dpiAware=1` sets the awareness directly and
+removes the dependency on Windows getting there by itself.
+
+### Diagnostics
+
+An optional `[debug]` section turns parts of the plugin off, to find what a
+troublesome setup is tripping over. All of them default to `0`:
+
+```ini
+[debug]
+disableWindowHook=0
+disableInputFilters=0
+disableMessagePump=0
+disableCursorGuard=0
+disableDisplayGuard=0
+disableGamePatches=0
+disableBorderlessStyle=0
+disableConversion=0
+```
+
+`disableConversion=1` leaves the plugin loaded but doing nothing, which is the
+useful control when deciding whether a problem is the plugin at all. The active
+combination is written to the log as a `debug switches:` line.
 
 Legacy `[BorderlessMode]` and `[SABorderless]` configurations remain supported.
 
