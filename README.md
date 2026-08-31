@@ -57,11 +57,11 @@ log=0
 
 # Shows GTA's actual in-game FPS. External tools such as NVIDIA
 # counters may show the window's refresh rate instead.
+# The hotkey is given as decimal Win32 virtual-key codes: 18 is Alt,
+# 122 is F11. Set hotkeyModifier=0 for a bare key with no modifier.
 [fpsCounter]
 show=0
 hotkeyEnabled=1
-# Decimal Win32 virtual-key codes: 18 is Alt, 122 is F11.
-# Set hotkeyModifier=0 for a bare key with no modifier.
 hotkeyModifier=18
 hotkeyKey=122
 ```

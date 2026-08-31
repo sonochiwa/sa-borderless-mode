@@ -30,11 +30,11 @@ const wchar_t kDefaultIni[] =
     L"\r\n"
     L"# Shows GTA's actual in-game FPS. External tools such as NVIDIA\r\n"
     L"# counters may show the window's refresh rate instead.\r\n"
+    L"# The hotkey is given as decimal Win32 virtual-key codes: 18 is Alt,\r\n"
+    L"# 122 is F11. Set hotkeyModifier=0 for a bare key with no modifier.\r\n"
     L"[fpsCounter]\r\n"
     L"show=0\r\n"
     L"hotkeyEnabled=1\r\n"
-    L"# Decimal Win32 virtual-key codes: 18 is Alt, 122 is F11.\r\n"
-    L"# Set hotkeyModifier=0 for a bare key with no modifier.\r\n"
     L"hotkeyModifier=18\r\n"
     L"hotkeyKey=122\r\n";
 
