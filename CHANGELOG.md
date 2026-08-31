@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Internal only, no behaviour changes: the single 2,500-line source file was
+  split into modules (core, d3d9, window, input, game), every hard-coded game
+  address moved into one header, and an unreachable leftover of the old
+  Alt+Tab "TAB re-injection" experiment was removed.
+
 ## v1.5.0 - 2026-08-17
 
 - Fixed the game closing by itself right after launch. On a newly assembled

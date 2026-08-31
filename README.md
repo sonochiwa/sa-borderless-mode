@@ -132,11 +132,20 @@ gh attestation verify BorderlessMode-v1.5.0.zip -R sonochiwa/sa-borderless-mode
 
 ```text
 Config\BorderlessMode.ini        Default release config
-src\dllmain.cpp                  ASI source
+src\dllmain.cpp                  DllMain and startup order
+src\version.h                    Version string used by the default config
+src\core\                        Logging, config, module paths, hook helpers
+src\d3d9\                        Present-parameter conversion, D3D9 hooks
+src\window\                      Borderless geometry, window proc, display mode
+src\input\                       Key-state, message-pump and cursor filters
+src\game\                        Everything tied to GTA SA 1.0 US addresses
 src\BorderlessMode.vcxproj       Visual C++ project
 vendor\minhook\                  Vendored MinHook sources
 BorderlessMode.sln               Visual Studio solution
 ```
+
+Every hard-coded GTA address lives in `src\game\addresses.h`; nothing outside
+`src\game\` depends on a specific executable.
 
 ## How It Works
 

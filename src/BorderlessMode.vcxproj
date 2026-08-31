@@ -55,7 +55,7 @@
       <LanguageStandard>stdcpp17</LanguageStandard>
       <ExceptionHandling>Async</ExceptionHandling>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
-      <AdditionalIncludeDirectories>$(SolutionDir)vendor\minhook\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)src;$(SolutionDir)vendor\minhook\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
     </ClCompile>
     <Link>
@@ -78,7 +78,7 @@
       <LanguageStandard>stdcpp17</LanguageStandard>
       <ExceptionHandling>Async</ExceptionHandling>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
-      <AdditionalIncludeDirectories>$(SolutionDir)vendor\minhook\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)src;$(SolutionDir)vendor\minhook\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
     </ClCompile>
     <Link>
@@ -93,18 +93,57 @@
   </ItemDefinitionGroup>
 
   <ItemGroup>
+    <ClInclude Include="version.h" />
+    <ClInclude Include="core\config.h" />
+    <ClInclude Include="core\hook.h" />
+    <ClInclude Include="core\log.h" />
+    <ClInclude Include="core\memory.h" />
+    <ClInclude Include="core\module.h" />
+    <ClInclude Include="d3d9\device_hooks.h" />
+    <ClInclude Include="d3d9\present_params.h" />
+    <ClInclude Include="game\addresses.h" />
+    <ClInclude Include="game\fps_overlay.h" />
+    <ClInclude Include="game\patches.h" />
+    <ClInclude Include="input\cursor.h" />
+    <ClInclude Include="input\key_filter.h" />
+    <ClInclude Include="input\message_pump.h" />
+    <ClInclude Include="window\borderless.h" />
+    <ClInclude Include="window\display_mode.h" />
+    <ClInclude Include="window\window_proc.h" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ClCompile Include="dllmain.cpp" />
+    <ClCompile Include="core\config.cpp" />
+    <ClCompile Include="core\hook.cpp" />
+    <ClCompile Include="core\log.cpp" />
+    <ClCompile Include="core\memory.cpp" />
+    <ClCompile Include="core\module.cpp" />
+    <ClCompile Include="d3d9\device_hooks.cpp" />
+    <ClCompile Include="d3d9\present_params.cpp" />
+    <ClCompile Include="game\fps_overlay.cpp" />
+    <ClCompile Include="game\patches.cpp" />
+    <ClCompile Include="input\cursor.cpp" />
+    <ClCompile Include="input\key_filter.cpp" />
+    <ClCompile Include="input\message_pump.cpp" />
+    <ClCompile Include="window\borderless.cpp" />
+    <ClCompile Include="window\display_mode.cpp" />
+    <ClCompile Include="window\window_proc.cpp" />
     <ClCompile Include="..\vendor\minhook\src\buffer.c">
       <DisableSpecificWarnings>4100;4201;4244;4310;4701;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+      <ObjectFileName>$(IntDir)minhook_%(Filename).obj</ObjectFileName>
     </ClCompile>
     <ClCompile Include="..\vendor\minhook\src\hook.c">
       <DisableSpecificWarnings>4100;4201;4244;4310;4701;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+      <ObjectFileName>$(IntDir)minhook_%(Filename).obj</ObjectFileName>
     </ClCompile>
     <ClCompile Include="..\vendor\minhook\src\trampoline.c">
       <DisableSpecificWarnings>4100;4201;4244;4310;4701;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+      <ObjectFileName>$(IntDir)minhook_%(Filename).obj</ObjectFileName>
     </ClCompile>
     <ClCompile Include="..\vendor\minhook\src\hde\hde32.c">
       <DisableSpecificWarnings>4100;4201;4244;4310;4701;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+      <ObjectFileName>$(IntDir)minhook_%(Filename).obj</ObjectFileName>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
