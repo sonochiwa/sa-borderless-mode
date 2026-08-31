@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- The FPS counter is now toggled with **Alt+F11** instead of F11, so a bare
+  F11 stays free for overlays and recording software. Existing configurations
+  keep the key they already have; to move to the new default, set
+  `hotkeyModifier=18` or delete `BorderlessMode.ini` and let it be recreated.
 - Fixed the game closing itself a second after startup on a display with
   scaling above 100%. This is the failure that looked random and unfixable: a
   freshly assembled modpack in a new folder would not start, while the same
