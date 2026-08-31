@@ -56,6 +56,17 @@ bool MakeProcessDpiAware() {
     return setAware && setAware() != FALSE;
 }
 
+bool IsProcessDpiAwareNow() {
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    if (!user32) {
+        return false;
+    }
+    using IsProcessDPIAwareFn = BOOL (WINAPI*)(void);
+    auto isAware = reinterpret_cast<IsProcessDPIAwareFn>(
+        GetProcAddress(user32, "IsProcessDPIAware"));
+    return isAware && isAware() != FALSE;
+}
+
 void PinSelf() {
     HMODULE pinned = nullptr;
     GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN |

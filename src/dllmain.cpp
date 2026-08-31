@@ -45,8 +45,18 @@ DWORD WINAPI Initialize(LPVOID) {
     bm::LogConfigSummary();
 
     if (bm::GetConfig().dpiAware) {
-        bm::Log("process DPI awareness: set=%d",
-                bm::MakeProcessDpiAware() ? 1 : 0);
+        const bool set = bm::MakeProcessDpiAware();
+        const bool aware = bm::IsProcessDpiAwareNow();
+        bm::Log("process DPI awareness: set=%d aware=%d", set ? 1 : 0,
+                aware ? 1 : 0);
+        if (!aware) {
+            // A DPI override on gta_sa.exe (Properties -> Compatibility ->
+            // Change high DPI settings) is applied by the shim engine before
+            // any code here runs and cannot be undone from inside the process.
+            bm::Log("process DPI awareness: STILL UNAWARE - a high DPI scaling "
+                    "override on gta_sa.exe beats this; borderless will "
+                    "misbehave on a scaled display");
+        }
     }
     bm::Log("initialize begin: module=0x%p log=%d",
             bm::SelfModule(), bm::LogEnabled() ? 1 : 0);

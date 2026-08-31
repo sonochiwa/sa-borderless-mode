@@ -33,4 +33,9 @@ void PinSelf();
 // Returns true when awareness was set by this call.
 bool MakeProcessDpiAware();
 
+// The state that actually took effect. A "high DPI scaling override" set on
+// gta_sa.exe wins over the call above, which still reports success, so this is
+// the only trustworthy answer.
+bool IsProcessDpiAwareNow();
+
 }  // namespace bm

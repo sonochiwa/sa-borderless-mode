@@ -101,6 +101,16 @@ that had been launched a few times were fine, and why launching once without the
 plugin appeared to repair it. `dpiAware=1` sets the awareness directly and
 removes the dependency on Windows getting there by itself.
 
+None of this applies at 100% scaling, where Windows virtualizes nothing, and
+the in-game resolution does not matter either: the window is sized from the
+monitor and the back buffer keeps whatever the game selected.
+
+One setting still overrides the plugin. If **Properties -> Compatibility ->
+Change high DPI settings -> Override high DPI scaling behavior** is ticked on
+`gta_sa.exe`, the shim engine applies that before any plugin code runs and it
+cannot be undone from inside the process. Untick it. With `log=1` this shows up
+as `process DPI awareness: set=1 aware=0` followed by a `STILL UNAWARE` line.
+
 ### Diagnostics
 
 An optional `[debug]` section turns parts of the plugin off, to find what a
