@@ -26,6 +26,13 @@ void LogInit() {
 }
 
 void LogShutdown() {
+    // The only flush there is, on the way out. Belt and braces: the OS would
+    // write the cached data anyway.
+    if (g_logFile != INVALID_HANDLE_VALUE && g_logLockInitialized) {
+        EnterCriticalSection(&g_logLock);
+        FlushFileBuffers(g_logFile);
+        LeaveCriticalSection(&g_logLock);
+    }
     InterlockedExchange(&g_shuttingDown, 1);
 }
 
@@ -84,10 +91,20 @@ void Log(const char* format, ...) {
     message[total++] = '\r';
     message[total++] = '\n';
 
+    // Deliberately no FlushFileBuffers here. It forces a synchronous disk
+    // write per line, which cost tens of milliseconds each during startup and
+    // stretched the plugin's own initialization badly enough to change the
+    // timing being diagnosed - a logger that distorts what it measures is
+    // worse than no logger in a plugin whose bugs are mostly races.
+    //
+    // Nothing is lost by dropping it: WriteFile hands the data to the OS file
+    // cache, which survives the process dying. FlushFileBuffers only protects
+    // against losing power, which is not a case worth optimizing a game plugin
+    // for. The log is still complete after a crash, a clean exit or an
+    // outright TerminateProcess.
     EnterCriticalSection(&g_logLock);
     DWORD written = 0;
     WriteFile(g_logFile, message, total, &written, nullptr);
-    FlushFileBuffers(g_logFile);
     LeaveCriticalSection(&g_logLock);
 }
 

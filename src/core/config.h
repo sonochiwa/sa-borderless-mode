@@ -23,6 +23,9 @@ struct Config {
     bool disableGamePatches = false;    // NoFrameDelay, refresh rate, FPS overlay
     bool disableBorderlessStyle = false;  // the window restyle and geometry
     bool disableConversion = false;       // the fullscreen->windowed conversion
+    // Ticks a line every 500 ms while the game runs. Tells a process that died
+    // apart from one whose window messages merely stopped arriving.
+    bool heartbeat = false;
 
     // Declaring the process DPI aware is what keeps a windowed device valid on
     // a scaled display. On by default; here to switch off if it ever clashes.

@@ -126,11 +126,36 @@ disableDisplayGuard=0
 disableGamePatches=0
 disableBorderlessStyle=0
 disableConversion=0
+heartbeat=0
 ```
 
 `disableConversion=1` leaves the plugin loaded but doing nothing, which is the
 useful control when deciding whether a problem is the plugin at all. The active
-combination is written to the log as a `debug switches:` line.
+combination is written to the log as a `debug switches:` line. `heartbeat=1`
+adds a line every 500 ms for a minute, which tells a process that died apart
+from one whose window messages merely stopped arriving.
+
+Do not disable `borderlessStyle` while leaving `conversion` on: that gives the
+device a windowed swap chain while the window keeps its fullscreen geometry,
+which does not work by itself and will look like the conversion failing.
+
+`tools\repro.ps1` drives all of this. Its `-Fresh` switch is the important
+part: it points a directory junction at the modpack, so the game runs from a
+path Windows has no compatibility history for, and clears that history again
+before every launch. That is what "a brand new modpack folder" means in
+practice, and it is the difference between a bug that reproduces on demand and
+one that looks random. Nothing is copied.
+
+```powershell
+# Does a fresh install of this modpack start at all?
+.\tools\repro.ps1 -Root 'D:\modpacks\mypack' -Fresh
+
+# It does not - which part of the plugin is it?
+.\tools\repro.ps1 -Root 'D:\modpacks\mypack' -Fresh -Matrix
+
+# Does a compatibility shim explain it?
+.\tools\repro.ps1 -Root 'D:\modpacks\mypack' -Fresh -CompatLayer DPIUNAWARE
+```
 
 Legacy `[BorderlessMode]` and `[SABorderless]` configurations remain supported.
 
@@ -187,6 +212,7 @@ src\window\                      Borderless geometry, window proc, display mode
 src\input\                       Key-state, message-pump and cursor filters
 src\game\                        Everything tied to GTA SA 1.0 US addresses
 src\BorderlessMode.vcxproj       Visual C++ project
+tools\repro.ps1                  Reproduction harness for startup bugs
 vendor\minhook\                  Vendored MinHook sources
 BorderlessMode.sln               Visual Studio solution
 ```

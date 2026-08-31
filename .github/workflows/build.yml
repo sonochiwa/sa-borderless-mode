@@ -1,0 +1,53 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - "**"
+    tags-ignore:
+      - "**"
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2022
+
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration: [Release, Debug]
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Configure MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build ${{ matrix.configuration }}|Win32
+        shell: pwsh
+        run: |
+          msbuild BorderlessMode.sln `
+            /p:Configuration=${{ matrix.configuration }} `
+            /p:Platform=Win32 `
+            /warnaserror `
+            /nologo `
+            /verbosity:minimal `
+            /maxcpucount
+
+      - name: Check the ASI was produced
+        shell: pwsh
+        run: |
+          $asi = "build\BorderlessMode.asi"
+          if (-not (Test-Path $asi)) { throw "$asi was not built." }
+          "{0}: {1} bytes" -f $asi, (Get-Item $asi).Length
+
+      - name: Upload ${{ matrix.configuration }} build
+        uses: actions/upload-artifact@v4
+        with:
+          name: BorderlessMode-${{ matrix.configuration }}-Win32
+          path: |
+            build/BorderlessMode.asi
+            build/BorderlessMode.map
+          if-no-files-found: error

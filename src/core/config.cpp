@@ -149,6 +149,11 @@ bool HasIniSetting(const wchar_t* path, const wchar_t* section,
                                     path) != 0;
 }
 
+// Runs on a pool thread. Writes whatever the overlay flag currently says
+// rather than a captured value, so two toggles in quick succession converge
+// on the real state whichever order their work items run in.
+DWORD WINAPI SaveFpsOverlayStateWorker(LPVOID);
+
 void SaveFpsOverlayState(LONG enabled) {
     wchar_t iniPath[MAX_PATH] = {};
     if (!BuildIniPath(iniPath, MAX_PATH)) {
@@ -173,6 +178,11 @@ void SaveFpsOverlayState(LONG enabled) {
         return;
     }
     Log("FPS overlay state saved: enabled=%ld", enabled);
+}
+
+DWORD WINAPI SaveFpsOverlayStateWorker(LPVOID) {
+    SaveFpsOverlayState(InterlockedCompareExchange(&g_showFpsOverlay, 0, 0));
+    return 0;
 }
 
 }  // namespace
@@ -214,6 +224,7 @@ void LoadConfig() {
     g_config.disableGamePatches = debugFlag(L"disableGamePatches");
     g_config.disableBorderlessStyle = debugFlag(L"disableBorderlessStyle");
     g_config.disableConversion = debugFlag(L"disableConversion");
+    g_config.heartbeat = debugFlag(L"heartbeat");
     g_config.dpiAware =
         GetPrivateProfileIntW(kGeneralSection, L"dpiAware", 1, iniPath) != 0;
     wcscpy_s(g_iniPath, iniPath);
@@ -231,7 +242,7 @@ void LogConfigSummary() {
         ShowFpsOverlay() ? 1 : 0, g_config.fpsHotkeyEnabled ? 1 : 0,
         g_config.fpsHotkeyModifier, g_config.fpsHotkeyKey);
     Log("debug switches: window=%d input=%d pump=%d cursor=%d display=%d "
-        "patches=%d style=%d convert=%d dpiAware=%d",
+        "patches=%d style=%d convert=%d heartbeat=%d dpiAware=%d",
         g_config.disableWindowHook ? 1 : 0,
         g_config.disableInputFilters ? 1 : 0,
         g_config.disableMessagePump ? 1 : 0,
@@ -240,6 +251,7 @@ void LogConfigSummary() {
         g_config.disableGamePatches ? 1 : 0,
         g_config.disableBorderlessStyle ? 1 : 0,
         g_config.disableConversion ? 1 : 0,
+        g_config.heartbeat ? 1 : 0,
         g_config.dpiAware ? 1 : 0);
 }
 
@@ -250,7 +262,14 @@ bool ShowFpsOverlay() {
 bool ToggleFpsOverlay() {
     LONG enabled = ShowFpsOverlay() ? 0 : 1;
     InterlockedExchange(&g_showFpsOverlay, enabled);
-    SaveFpsOverlayState(enabled);
+
+    // The overlay is toggled from the window procedure, on the game thread.
+    // Writing the INI there stalls a frame on file I/O for a setting nothing
+    // is waiting for, so it goes to a pool thread.
+    if (!QueueUserWorkItem(&SaveFpsOverlayStateWorker, nullptr,
+                           WT_EXECUTEDEFAULT)) {
+        SaveFpsOverlayState(enabled);
+    }
     return enabled != 0;
 }
 

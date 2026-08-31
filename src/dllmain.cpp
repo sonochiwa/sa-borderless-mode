@@ -91,7 +91,7 @@ DWORD WINAPI Initialize(LPVOID) {
     bm::HookMessagePump();
     bm::ApplyQueuedHooks();
 
-    if (bm::LogEnabled()) {
+    if (bm::GetConfig().heartbeat) {
         HANDLE heartbeat = CreateThread(nullptr, 0, Heartbeat, nullptr, 0,
                                         nullptr);
         if (heartbeat) {

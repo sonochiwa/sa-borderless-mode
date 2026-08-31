@@ -166,6 +166,14 @@ HRESULT WINAPI HookedReset(IDirect3DDevice9* device,
         Log("Reset 16-bit compatible result=0x%08lX", result);
         if (SUCCEEDED(result)) {
             effective = &compatible;
+            // Worth saying plainly: the game asked for a 16-bit back buffer,
+            // could not have one windowed, and is now running at 32-bit. That
+            // changes how the game looks, and the log is the only place anyone
+            // would find out why.
+            Log("NOTE: 16-bit video mode is not available in borderless mode; "
+                "the back buffer was switched from format %u to 32-bit "
+                "X8R8G8B8. Colours will differ from exclusive fullscreen.",
+                converted.BackBufferFormat);
         }
     }
 
@@ -227,6 +235,14 @@ HRESULT WINAPI HookedCreateDevice(IDirect3D9* self,
             result, device ? *device : nullptr);
         if (SUCCEEDED(result)) {
             effective = &compatible;
+            // Worth saying plainly: the game asked for a 16-bit back buffer,
+            // could not have one windowed, and is now running at 32-bit. That
+            // changes how the game looks, and the log is the only place anyone
+            // would find out why.
+            Log("NOTE: 16-bit video mode is not available in borderless mode; "
+                "the back buffer was switched from format %u to 32-bit "
+                "X8R8G8B8. Colours will differ from exclusive fullscreen.",
+                converted.BackBufferFormat);
         }
     }
 

@@ -22,6 +22,39 @@ jobs:
       - name: Configure MSBuild
         uses: microsoft/setup-msbuild@v2
 
+      - name: Check the tag matches the version in the source
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}" -replace '^v', ''
+          if ($version -notmatch '^\d+\.\d+\.\d+$') {
+              throw "Release tag must contain a semantic version."
+          }
+
+          # src/version.h feeds the banner written into a freshly created
+          # BorderlessMode.ini. A tag that disagrees with it ships an archive
+          # whose config announces the wrong version.
+          $header = Get-Content src/version.h -Raw
+          $match = [regex]::Match($header, '#define\s+BM_VERSION_STRING\s+"(?<v>[^"]+)"')
+          if (-not $match.Success) {
+              throw "src/version.h has no BM_VERSION_STRING."
+          }
+          $source = $match.Groups['v'].Value
+          if ($source -ne $version) {
+              throw "Tag $version does not match BM_VERSION_STRING $source in src/version.h."
+          }
+
+          $wide = [regex]::Match($header, '#define\s+BM_VERSION_WIDE\s+L"(?<v>[^"]+)"')
+          if (-not $wide.Success -or $wide.Groups['v'].Value -ne $version) {
+              throw "BM_VERSION_WIDE in src/version.h does not match $version."
+          }
+
+          $ini = Get-Content Config/BorderlessMode.ini -Raw
+          if ($ini -notmatch [regex]::Escape("# BorderlessMode v$version")) {
+              throw "Config/BorderlessMode.ini does not announce v$version."
+          }
+
+          "Tag, src/version.h and Config/BorderlessMode.ini all agree on $version."
+
       - name: Build Release Win32
         run: msbuild BorderlessMode.sln /t:Rebuild /p:Configuration=Release /p:Platform=Win32
 

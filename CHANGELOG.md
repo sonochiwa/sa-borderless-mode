@@ -14,6 +14,14 @@
   screen at 125%.
 - Added an optional `[debug]` section for turning parts of the plugin off when
   tracking down a conflict, and a `dpiAware` setting under `[general]`.
+- Toggling the FPS counter no longer writes its setting to disk on the frame
+  you press the key, which could cause a brief hitch.
+- Diagnostic logging is much cheaper. It used to force a disk write per line,
+  which slowed the game's startup enough to change the behaviour being
+  diagnosed. Logs are still complete after a crash.
+- A 16-bit video mode being switched to 32-bit, which borderless mode has
+  always had to do, now says so in the log instead of silently changing how
+  the game looks.
 - Internal only, no behaviour changes: the single 2,500-line source file was
   split into modules (core, d3d9, window, input, game), every hard-coded game
   address moved into one header, and an unreachable leftover of the old
