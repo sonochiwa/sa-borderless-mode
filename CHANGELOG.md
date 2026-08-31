@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v1.6.0 - 2026-09-01
 
 - The FPS counter is now toggled with **Alt+F11** instead of F11, so a bare
   F11 stays free for overlays and recording software. Existing configurations
