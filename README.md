@@ -67,7 +67,6 @@ hotkeyKey=122
 | Section | Key | Default | Meaning |
 | ------- | --- | ------- | ------- |
 | `general` | `log` | `0` | `1` writes `BorderlessMode.log` next to the ASI for diagnostics. |
-| `general` | `dpiAware` | `1` | Declares the game DPI aware. Needed for borderless mode on a scaled display; see below. Only set it to `0` if it clashes with something else. |
 | `fpsCounter` | `show` | `0` | Shows GTA's actual in-game FPS. Its value is saved whenever the counter is toggled in game. |
 | `fpsCounter` | `hotkeyEnabled` | `1` | Enables hotkey handling. Set to `0` to disable it without removing the key. |
 | `fpsCounter` | `hotkeyModifier` | `0` | Optional modifier as a decimal Win32 virtual-key code. `0` means no modifier. |
@@ -98,12 +97,14 @@ Windows works around this on its own, eventually, by recording a `HIGHDPIAWARE`
 compatibility layer for that particular `gta_sa.exe` path. That is why a freshly
 assembled modpack in a new folder could fail while the same files in a folder
 that had been launched a few times were fine, and why launching once without the
-plugin appeared to repair it. `dpiAware=1` sets the awareness directly and
-removes the dependency on Windows getting there by itself.
+plugin appeared to repair it. The plugin now declares the awareness itself on
+every launch, so none of that is left to chance.
 
-None of this applies at 100% scaling, where Windows virtualizes nothing, and
-the in-game resolution does not matter either: the window is sized from the
-monitor and the back buffer keeps whatever the game selected.
+There is deliberately no setting for it. At 100% scaling Windows virtualizes
+nothing and declaring awareness changes nothing; above 100% the game does not
+start without it. The in-game resolution makes no difference either way: the
+window is sized from the monitor and the back buffer keeps whatever the game
+selected.
 
 One setting still overrides the plugin. If **Properties -> Compatibility ->
 Change high DPI settings -> Override high DPI scaling behavior** is ticked on
@@ -126,6 +127,7 @@ disableDisplayGuard=0
 disableGamePatches=0
 disableBorderlessStyle=0
 disableConversion=0
+disableDpiAware=0
 heartbeat=0
 ```
 

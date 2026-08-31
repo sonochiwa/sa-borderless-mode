@@ -23,13 +23,17 @@ struct Config {
     bool disableGamePatches = false;    // NoFrameDelay, refresh rate, FPS overlay
     bool disableBorderlessStyle = false;  // the window restyle and geometry
     bool disableConversion = false;       // the fullscreen->windowed conversion
+
+    // Declaring the process DPI aware is a precondition for a windowed device
+    // on a scaled display, not a preference: without it the game shuts itself
+    // down during startup above 100% scaling, and at 100% setting it changes
+    // nothing. So it is always done, and this only exists to take it out of
+    // the picture while diagnosing something else.
+    bool disableDpiAware = false;
+
     // Ticks a line every 500 ms while the game runs. Tells a process that died
     // apart from one whose window messages merely stopped arriving.
     bool heartbeat = false;
-
-    // Declaring the process DPI aware is what keeps a windowed device valid on
-    // a scaled display. On by default; here to switch off if it ever clashes.
-    bool dpiAware = true;
 };
 
 // Reads BorderlessMode.ini next to the ASI, creating it with defaults when it

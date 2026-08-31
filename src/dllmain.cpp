@@ -44,7 +44,7 @@ DWORD WINAPI Initialize(LPVOID) {
     bm::LogOpen();
     bm::LogConfigSummary();
 
-    if (bm::GetConfig().dpiAware) {
+    if (!bm::GetConfig().disableDpiAware) {
         const bool set = bm::MakeProcessDpiAware();
         const bool aware = bm::IsProcessDpiAwareNow();
         bm::Log("process DPI awareness: set=%d aware=%d", set ? 1 : 0,

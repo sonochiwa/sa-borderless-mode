@@ -13,7 +13,7 @@
   used to be sized as if the monitor were smaller - 2048x1152 on a 2560x1440
   screen at 125%.
 - Added an optional `[debug]` section for turning parts of the plugin off when
-  tracking down a conflict, and a `dpiAware` setting under `[general]`.
+  tracking down a conflict.
 - Toggling the FPS counter no longer writes its setting to disk on the frame
   you press the key, which could cause a brief hitch.
 - Diagnostic logging is much cheaper. It used to force a disk write per line,

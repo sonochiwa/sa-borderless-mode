@@ -28,11 +28,6 @@ const wchar_t kDefaultIni[] =
     L"[general]\r\n"
     L"log=0\r\n"
     L"\r\n"
-    L"# Declares the game DPI aware. Required for borderless mode on a display\r\n"
-    L"# with scaling above 100%; without it Windows feeds the game a virtual\r\n"
-    L"# desktop and the game shuts itself down during startup.\r\n"
-    L"dpiAware=1\r\n"
-    L"\r\n"
     L"# Shows GTA's actual in-game FPS. External tools such as NVIDIA\r\n"
     L"# counters may show the window's refresh rate instead.\r\n"
     L"[fpsCounter]\r\n"
@@ -224,9 +219,8 @@ void LoadConfig() {
     g_config.disableGamePatches = debugFlag(L"disableGamePatches");
     g_config.disableBorderlessStyle = debugFlag(L"disableBorderlessStyle");
     g_config.disableConversion = debugFlag(L"disableConversion");
+    g_config.disableDpiAware = debugFlag(L"disableDpiAware");
     g_config.heartbeat = debugFlag(L"heartbeat");
-    g_config.dpiAware =
-        GetPrivateProfileIntW(kGeneralSection, L"dpiAware", 1, iniPath) != 0;
     wcscpy_s(g_iniPath, iniPath);
 }
 
@@ -242,7 +236,7 @@ void LogConfigSummary() {
         ShowFpsOverlay() ? 1 : 0, g_config.fpsHotkeyEnabled ? 1 : 0,
         g_config.fpsHotkeyModifier, g_config.fpsHotkeyKey);
     Log("debug switches: window=%d input=%d pump=%d cursor=%d display=%d "
-        "patches=%d style=%d convert=%d heartbeat=%d dpiAware=%d",
+        "patches=%d style=%d convert=%d dpi=%d heartbeat=%d",
         g_config.disableWindowHook ? 1 : 0,
         g_config.disableInputFilters ? 1 : 0,
         g_config.disableMessagePump ? 1 : 0,
@@ -251,8 +245,8 @@ void LogConfigSummary() {
         g_config.disableGamePatches ? 1 : 0,
         g_config.disableBorderlessStyle ? 1 : 0,
         g_config.disableConversion ? 1 : 0,
-        g_config.heartbeat ? 1 : 0,
-        g_config.dpiAware ? 1 : 0);
+        g_config.disableDpiAware ? 1 : 0,
+        g_config.heartbeat ? 1 : 0);
 }
 
 bool ShowFpsOverlay() {

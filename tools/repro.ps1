@@ -22,11 +22,11 @@
     The modpack folder, i.e. the one holding gta_sa.exe.
 
 .PARAMETER Switches
-    Eight 0/1 flags, in order:
+    Nine 0/1 flags, in order:
       windowHook, inputFilters, messagePump, cursorGuard,
-      displayGuard, gamePatches, borderlessStyle, conversion
-    1 disables that part. '0,0,0,0,0,0,0,0' is the plugin fully enabled;
-    '1,1,1,1,1,1,1,1' leaves it loaded but inert, which is the control worth
+      displayGuard, gamePatches, borderlessStyle, conversion, dpiAware
+    1 disables that part. '0,0,0,0,0,0,0,0,0' is the plugin fully enabled;
+    '1,1,1,1,1,1,1,1,1' leaves it loaded but inert, which is the control worth
     having before blaming the plugin at all.
 
 .PARAMETER Matrix
@@ -53,7 +53,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Root,
 
-    [string]$Switches = '0,0,0,0,0,0,0,0',
+    [string]$Switches = '0,0,0,0,0,0,0,0,0',
     [switch]$Matrix,
     [switch]$Fresh,
     [string]$CompatLayer = '',
@@ -66,7 +66,7 @@ $ErrorActionPreference = 'Stop'
 $switchNames = @(
     'disableWindowHook', 'disableInputFilters', 'disableMessagePump',
     'disableCursorGuard', 'disableDisplayGuard', 'disableGamePatches',
-    'disableBorderlessStyle', 'disableConversion'
+    'disableBorderlessStyle', 'disableConversion', 'disableDpiAware'
 )
 $layersKey = 'HKCU:\Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers'
 
@@ -158,9 +158,9 @@ try {
     # not as a step in a bisection.
     $combinations = if ($Matrix) {
         @(
-            '1,1,1,1,1,1,1,1'   # inert: is the plugin involved at all?
-            '1,1,1,1,1,1,0,0'   # core: conversion plus the borderless restyle
-            '0,0,0,0,0,0,0,0'   # everything
+            '1,1,1,1,1,1,1,1,1'   # inert: is the plugin involved at all?
+            '1,1,1,1,1,1,0,0,0'   # core: conversion, restyle and DPI awareness
+            '0,0,0,0,0,0,0,0,0'   # everything
         )
     } else {
         @($Switches)
@@ -177,7 +177,7 @@ try {
     }
 
     Write-Host ""
-    Write-Host "order: windowHook,inputFilters,messagePump,cursorGuard,displayGuard,gamePatches,borderlessStyle,conversion"
+    Write-Host ("order: " + ($switchNames -replace '^disable', '' -join ','))
     $results | Format-Table Switches, Result -AutoSize
 } finally {
     $ini = Join-Path $gameRoot 'scripts\BorderlessMode.ini'
