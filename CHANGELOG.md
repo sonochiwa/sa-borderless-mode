@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.6.1 - 2026-09-02
+
+- Fixed the game freezing for good on the first Alt+Tab when
+  `SAMPGraphicRestore.asi` is installed alongside this plugin. GTA keeps a
+  "window has focus" flag and, while it is clear, WinMain does nothing but
+  pump messages and sleep 100 ms per iteration - no rendering, no input, no
+  game logic. Stock GTA sets it again from two places, its WM_ACTIVATE and its
+  WM_SETFOCUS handler. SAMPGraphicRestore overwrites the WM_ACTIVATE one with
+  NOPs, and this plugin swallows WM_SETFOCUS to keep the ESC menu from opening
+  on every Alt+Tab back, so with both installed nothing set the flag again and
+  the game sat there frozen. The plugin now sets it itself when the window
+  takes focus, which is what GTA would have done in either handler.
+
 ## v1.6.0 - 2026-09-01
 
 - The FPS counter is now toggled with **Alt+F11** instead of F11, so a bare
