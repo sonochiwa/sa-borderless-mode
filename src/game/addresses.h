@@ -25,6 +25,22 @@ constexpr uintptr_t kFrameCounter = 0x00B7CB4C;
 // The game's IDirect3DDevice9*.
 constexpr uintptr_t kDirect3DDevice = 0x00C97C28;
 
+// GTA's "the window has input focus" flag. While it is zero WinMain does
+// nothing but pump messages and sleep 100 ms per iteration: no rendering, no
+// input, no game logic. Stock GTA sets it back to 1 from two places, the
+// WM_ACTIVATE and the WM_SETFOCUS arms of its window procedure.
+constexpr uintptr_t kGameInFocus = 0x008D621C;
+
+// The WM_KILLFOCUS arm of the same window procedure - `mov [kGameInFocus], 0`.
+// It is only read, never written, and only to confirm that the flag really
+// does live at kGameInFocus on this executable. The WM_ACTIVATE arm would be
+// the more obvious anchor and is deliberately not used: SAMPGraphicRestore.asi
+// overwrites that one with NOPs, and surviving exactly that is the point.
+constexpr uintptr_t kGameInFocusClearSite = 0x00748054;
+constexpr unsigned char kGameInFocusClearSignature[] = {
+    0xC7, 0x05, 0x1C, 0x62, 0x8D, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
 // Refresh rate the game rebuilds its selected video mode from.
 constexpr uintptr_t kRefreshRate = 0x008E243C;
 

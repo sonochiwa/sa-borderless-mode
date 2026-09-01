@@ -3,6 +3,7 @@
 #include "core/config.h"
 #include "core/log.h"
 #include "d3d9/device_hooks.h"
+#include "game/patches.h"
 #include "input/key_filter.h"
 #include "window/borderless.h"
 #include "window/display_mode.h"
@@ -391,8 +392,11 @@ LRESULT CALLBACK GameWndProc(HWND window, UINT message, WPARAM wParam,
 
     switch (message) {
         case WM_SETFOCUS:
-            // Avoid the vanilla restore-from-tray ESC menu.
+            // Avoid the vanilla restore-from-tray ESC menu. That menu is all
+            // this arm is being suppressed for; the other thing GTA does here
+            // is mark itself focused again, and that still has to happen.
             Log("wnd WM_SETFOCUS suppressed");
+            RestoreGameInFocus("WM_SETFOCUS");
             MuteKeysHeldAtRefocus();
             return 0;
 
@@ -400,6 +404,11 @@ LRESULT CALLBACK GameWndProc(HWND window, UINT message, WPARAM wParam,
             // Snapshot held keys as early as possible on focus gain, before
             // the game or SA-MP polls or receives autorepeat messages.
             if (LOWORD(wParam) != WA_INACTIVE) {
+                // The game's own write here is a NOP once SAMPGraphicRestore
+                // has loaded, and the WM_SETFOCUS arm never runs because this
+                // plugin swallows the message. Without this the flag stays
+                // clear and WinMain idles at 100 ms a frame for good.
+                RestoreGameInFocus("WM_ACTIVATE");
                 MuteKeysHeldAtRefocus();
                 if (!WindowPutAway() && BorderlessPending() &&
                     !IsIconic(window)) {

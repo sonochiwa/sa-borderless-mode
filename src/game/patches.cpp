@@ -29,6 +29,22 @@ constexpr BytePatch kNoFrameDelayPatches[] = {
 constexpr size_t kNoFrameDelayPatchCount =
     sizeof(kNoFrameDelayPatches) / sizeof(kNoFrameDelayPatches[0]);
 
+// Returns 1 when the flag was clear and has been set, 0 when it already was
+// set, -1 when the access faulted. Kept apart from its caller so the caller is
+// free to use anything __try would not allow.
+int SetGameInFocusFlag() {
+    DWORD* flag = reinterpret_cast<DWORD*>(game::kGameInFocus);
+    __try {
+        if (*flag != 0) {
+            return 0;
+        }
+        *flag = 1;
+        return 1;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return -1;
+    }
+}
+
 int __cdecl HookedApplyVideoMode(void* arg1, void* arg2, void* arg3) {
     // Matches RefreshRateFixByDarkP1xel32: GTA reads this global while
     // rebuilding the selected video mode.
@@ -111,6 +127,34 @@ bool UpdateGameRefreshRate() {
     Log("RefreshRateFix set game refresh rate to %u Hz",
         mode.dmDisplayFrequency);
     return true;
+}
+
+void RestoreGameInFocus(const char* reason) {
+    if (GetConfig().disableGamePatches) {
+        return;
+    }
+    if (!game::IsSupportedExecutable()) {
+        return;
+    }
+
+    static bool loggedMismatch = false;
+    if (!BytesMatch(reinterpret_cast<const void*>(game::kGameInFocusClearSite),
+                    game::kGameInFocusClearSignature,
+                    sizeof(game::kGameInFocusClearSignature))) {
+        if (!loggedMismatch) {
+            loggedMismatch = true;
+            Log("focus flag skipped: signature mismatch at 0x%08lX",
+                static_cast<unsigned long>(game::kGameInFocusClearSite));
+        }
+        return;
+    }
+
+    const int result = SetGameInFocusFlag();
+    if (result > 0) {
+        Log("game focus flag restored: %s", reason);
+    } else if (result < 0) {
+        Log("game focus flag write failed: %s", reason);
+    }
 }
 
 void HookApplyVideoMode() {

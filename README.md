@@ -47,7 +47,7 @@ If `BorderlessMode.ini` is missing, the plugin creates it next to
 Edit `BorderlessMode.ini` and restart the game.
 
 ```ini
-# BorderlessMode v1.6.0
+# BorderlessMode v1.6.1
 # Created by sonochiwa
 # Source code: https://github.com/sonochiwa/sa-borderless-mode
 # Default FPS toggle hotkey: Alt + F11
@@ -114,6 +114,16 @@ Change high DPI settings -> Override high DPI scaling behavior** is ticked on
 `gta_sa.exe`, the shim engine applies that before any plugin code runs and it
 cannot be undone from inside the process. Untick it. With `log=1` this shows up
 as `process DPI awareness: set=1 aware=0` followed by a `STILL UNAWARE` line.
+
+### Other plugins
+
+`SAMPGraphicRestore.asi` NOPs the instruction in GTA's WM_ACTIVATE handler that
+marks the game focused again. This plugin swallows WM_SETFOCUS, GTA's only other
+way of setting that flag, so that Alt+Tab does not open the ESC menu every time.
+With both installed and nothing setting the flag, the game used to sit in its
+unfocused idle loop - one message pump and a 100 ms sleep per iteration, no
+rendering and no input - from the first Alt+Tab onwards. Since v1.6.1 the plugin
+sets the flag itself, and the two work together.
 
 ### Diagnostics
 
@@ -190,7 +200,7 @@ build\BorderlessMode.asi
 The local release archive is:
 
 ```text
-build\BorderlessMode-v1.6.0.zip
+build\BorderlessMode-v1.6.1.zip
 ```
 
 `build\` is generated output and is intentionally ignored by git.
@@ -202,7 +212,7 @@ contains the ZIP archive, a SHA-256 checksum file, and a signed GitHub artifact
 attestation that binds the archive to its source commit and workflow:
 
 ```bat
-gh attestation verify BorderlessMode-v1.6.0.zip -R sonochiwa/sa-borderless-mode
+gh attestation verify BorderlessMode-v1.6.1.zip -R sonochiwa/sa-borderless-mode
 ```
 
 ## Repository Layout

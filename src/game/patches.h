@@ -19,4 +19,14 @@ bool UpdateGameRefreshRate();
 // video setting changes.
 void HookApplyVideoMode();
 
+// Marks the game as focused again, the way GTA's own window procedure does on
+// WM_ACTIVATE and WM_SETFOCUS. Call it from the window hook whenever the game
+// takes focus back: the plugin swallows WM_SETFOCUS, and SAMPGraphicRestore.asi
+// NOPs the WM_ACTIVATE write, so between the two the flag could otherwise stay
+// clear forever and leave the game sleeping in its unfocused idle loop.
+//
+// Does nothing when the flag is already set, when game patches are disabled,
+// or when the executable is not GTA SA 1.0 US.
+void RestoreGameInFocus(const char* reason);
+
 }  // namespace bm
