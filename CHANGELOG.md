@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.7.0 - 2026-09-10
+
+- Added the MIT license. The repository shipped ten releases without one, so
+  the terms were nowhere in the source tree.
+- Removed `.clang-format` and `.editorconfig`. They are local tooling
+  preferences rather than part of what the plugin ships or how it builds.
+
 ## v1.6.1 - 2026-09-02
 
 - Fixed the game freezing for good on the first Alt+Tab when

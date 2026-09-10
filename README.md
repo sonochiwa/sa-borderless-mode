@@ -47,7 +47,7 @@ If `BorderlessMode.ini` is missing, the plugin creates it next to
 Edit `BorderlessMode.ini` and restart the game.
 
 ```ini
-# BorderlessMode v1.6.1
+# BorderlessMode v1.7.0
 # Created by sonochiwa
 # Source code: https://github.com/sonochiwa/sa-borderless-mode
 # Default FPS toggle hotkey: Alt + F11
@@ -200,7 +200,7 @@ build\BorderlessMode.asi
 The local release archive is:
 
 ```text
-build\BorderlessMode-v1.6.1.zip
+build\BorderlessMode-v1.7.0.zip
 ```
 
 `build\` is generated output and is intentionally ignored by git.
@@ -212,7 +212,7 @@ contains the ZIP archive, a SHA-256 checksum file, and a signed GitHub artifact
 attestation that binds the archive to its source commit and workflow:
 
 ```bat
-gh attestation verify BorderlessMode-v1.6.1.zip -R sonochiwa/sa-borderless-mode
+gh attestation verify BorderlessMode-v1.7.0.zip -R sonochiwa/sa-borderless-mode
 ```
 
 ## Repository Layout
