@@ -250,3 +250,7 @@ After the device exists, `IDirect3DDevice9::Reset` is hooked as well, so the mod
 survives alt-tab and video setting changes. Hook-side changes are wrapped in SEH
 so unexpected wrapper behavior falls back to the original game call instead of
 crashing the game.
+
+## License
+
+[MIT](LICENSE)
