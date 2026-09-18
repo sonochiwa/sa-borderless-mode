@@ -73,7 +73,6 @@ jobs:
           Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Path $stage -Force | Out-Null
           Copy-Item build\BorderlessMode.asi, Config\BorderlessMode.ini -Destination $stage
-          Copy-Item README.md -Destination (Join-Path $stage README.txt)
           Compress-Archive -Path "$stage\*" -DestinationPath $archive -Force
           $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
           "$hash  $archiveName" | Set-Content -LiteralPath $checksum -Encoding ascii
