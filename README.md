@@ -1,64 +1,65 @@
-# BorderlessMode.asi
+# Borderless Mode
 
-Borderless fullscreen windowed mode for **GTA San Andreas** without capping FPS
-at the monitor refresh rate.
+`BorderlessMode.asi` is a standalone GTA San Andreas plugin that runs the game
+in a borderless fullscreen window without capping the frame rate at the
+monitor refresh rate.
 
-BorderlessMode is a standalone ASI plugin. It uses WinAPI, D3D9 headers from the
-Windows SDK, and MinHook sources vendored in `vendor\minhook`.
+The game creates an exclusive fullscreen Direct3D 9 device. That ties its
+frame rate to the refresh rate, turns every Alt-Tab into a display mode
+switch, and confuses overlays and capture tools. The plugin converts the
+device's present parameters to a windowed swap chain with immediate
+presentation, restyles the game window into a borderless one covering the
+monitor, and then keeps the game from noticing: display-mode changes, cursor
+confinement, focus-driven key state and the message pump are filtered so the
+game behaves as it would in exclusive mode.
 
-## What It Does
+The borderless conversion and the Direct3D hooks do not depend on a specific
+executable. The built-in FPS counter, the refresh-rate synchronisation and the
+frame-delay patch use GTA San Andreas 1.0 US addresses and verify the expected
+bytes before patching; on another executable those parts are skipped.
 
-- Converts exclusive fullscreen D3D9 presentation to borderless windowed mode.
-- Removes the vsync wait by forcing `D3DPRESENT_INTERVAL_IMMEDIATE`.
-- Keeps GTA's refresh-rate value synchronized with the current desktop mode
-  when video settings are applied.
-- Preserves the NoFrameDelay patch across D3D device resets and supports
-  selecting 16-bit video modes.
-- Keeps working after alt-tab and in-game video setting changes by also handling
+## Features
+
+- Converts exclusive fullscreen D3D9 presentation to borderless windowed mode
+  and removes the vsync wait by forcing `D3DPRESENT_INTERVAL_IMMEDIATE`.
+- Keeps the game's refresh-rate value synchronised with the desktop mode when
+  video settings are applied, and preserves the frame-delay patch across
+  device resets.
+- Keeps working after Alt-Tab and in-game video setting changes by handling
   `IDirect3DDevice9::Reset`.
 - Leaves already-windowed setups alone and only removes the vsync wait.
-- Press **Alt+F11** to show or hide GTA's actual in-game FPS.
-- Blocks **Alt+Enter** so the game cannot accidentally leave borderless mode.
-- Hides the TAB press of Alt+Tab from the game, so the SA:MP scoreboard no
-  longer gets stuck open after switching back.
+- Shows the game's actual in-game FPS on Alt+F11, because external counters
+  may report the window's refresh rate instead.
+- Blocks Alt+Enter so the game cannot leave borderless mode, and hides the
+  Tab of Alt+Tab from the game so the SA-MP scoreboard does not stick open.
+- Declares the process DPI aware, so the game starts on a scaled display from
+  a folder Windows has no compatibility history for.
+- Creates the default INI when it is missing.
 
-The core borderless D3D9 hooks do not depend on a specific GTA executable.
-The integrated FPS counter, RefreshRateFix, and NoFrameDelay features use GTA
-SA 1.0 US addresses and verify the expected code signatures before patching.
-On an unknown executable, those address-dependent features are skipped safely.
+## Requirements
+
+- GTA San Andreas 1.0 US (Compact or Hoodlum executable). The borderless
+  conversion itself works on other executables; the address-dependent parts
+  are skipped there.
+- An ASI loader, such as Silent's ASI Loader or Ultimate ASI Loader.
 
 ## Installation
 
-Copy these files from the release archive to your GTA SA folder, or to the folder
-used by your ASI loader:
-
-```text
-BorderlessMode.asi
-BorderlessMode.ini
-```
-
-Ultimate ASI Loader and CLEO ASI loading are both fine.
-
-If `BorderlessMode.ini` is missing, the plugin creates it next to
-`BorderlessMode.asi` with default values.
+1. Extract `BorderlessMode.asi` and `BorderlessMode.ini` into the GTA San
+   Andreas directory or its `scripts` directory.
+2. Start the game.
 
 ## Configuration
 
-Edit `BorderlessMode.ini` and restart the game.
-
 ```ini
-# BorderlessMode v1.7.0
+# Borderless Mode v1.7.1
 # Created by sonochiwa
 # Source code: https://github.com/sonochiwa/sa-borderless-mode
-# Default FPS toggle hotkey: Alt + F11
+# Default FPS counter hotkey: Alt + F11
 
 [general]
 log=0
 
-# Shows GTA's actual in-game FPS. External tools such as NVIDIA
-# counters may show the window's refresh rate instead.
-# The hotkey is given as decimal Win32 virtual-key codes: 18 is Alt,
-# 122 is F11. Set hotkeyModifier=0 for a bare key with no modifier.
 [fpsCounter]
 show=0
 hotkeyEnabled=1
@@ -66,27 +67,21 @@ hotkeyModifier=18
 hotkeyKey=122
 ```
 
-| Section | Key | Default | Meaning |
-| ------- | --- | ------- | ------- |
-| `general` | `log` | `0` | `1` writes `BorderlessMode.log` next to the ASI for diagnostics. |
-| `fpsCounter` | `show` | `0` | Shows GTA's actual in-game FPS. Its value is saved whenever the counter is toggled in game. |
-| `fpsCounter` | `hotkeyEnabled` | `1` | Enables hotkey handling. Set to `0` to disable it without removing the key. |
-| `fpsCounter` | `hotkeyModifier` | `18` | Modifier as a decimal Win32 virtual-key code. `18` is Alt; `0` means no modifier. |
-| `fpsCounter` | `hotkeyKey` | `122` | Main key as a decimal Win32 virtual-key code (`122` is F11). Removing the key or setting it to `0` disables hotkey handling. |
+| Setting | Default | Meaning |
+| --- | ---: | --- |
+| `[general]` | | |
+| `log` | `0` | `1` writes `BorderlessMode.log` next to the plugin, recreated on every start. |
+| `[fpsCounter]` | | |
+| `show` | `0` | Shows the game's actual in-game FPS. Written back whenever the counter is toggled in game. |
+| `hotkeyEnabled` | `1` | Enables the hotkey. `0` disables it without removing the key. |
+| `hotkeyModifier` | `18` | Modifier as a decimal Win32 virtual-key code. `18` is Alt; `0` means no modifier. |
+| `hotkeyKey` | `122` | Main key as a decimal Win32 virtual-key code; `122` is F11. Removing the key or setting it to `0` disables the hotkey. |
 
-> **Why the FPS counter is built in:** External programs, including NVIDIA
-> tools and other FPS overlays, may show a misleading value with this
-> borderless mode. They can count how often the game window is refreshed
-> instead of how many frames GTA is actually producing. The built-in counter
-> shows GTA's real in-game FPS, so it is the value to use when checking
-> performance.
-
-For example, use `hotkeyModifier=18` and `hotkeyKey=89` for **Alt + Y**, or
-`hotkeyModifier=0` and `hotkeyKey=122` for a bare **F11**.
-The main key is intercepted only while the configured modifier is held.
-
-The log is recreated on each game start. If the game hangs or shows a black
-screen, close the process and send `BorderlessMode.log` from the GTA SA folder.
+The FPS counter is built in because external overlays may count how often the
+game window is refreshed rather than how many frames the game produces. The
+hotkey toggles the counter and saves the new `show` value; it does not reload
+the INI. The main key is intercepted only while the configured modifier is
+held. Settings are read once at startup.
 
 ### Display scaling
 
@@ -172,72 +167,59 @@ one that looks random. Nothing is copied.
 .\tools\repro.ps1 -Root 'D:\modpacks\mypack' -Fresh -CompatLayer DPIUNAWARE
 ```
 
-Legacy `[BorderlessMode]` and `[SABorderless]` configurations remain supported.
+Legacy `[BorderlessMode]` and `[SABorderless]` sections are still read.
 
 The game and SA:MP poll the global key state (`GetKeyState`,
 `GetAsyncKeyState`, `GetKeyboardState`). The plugin mutes those APIs while
 another process owns the foreground so held keys from Alt+Tab cannot leak into
 the game when it regains focus.
 
-The default release config is stored in `Config\BorderlessMode.ini`.
-
 ## Building
 
-Open `BorderlessMode.sln` in Visual Studio 2022 and build `Release|Win32`.
+Visual Studio 2022 (v143), `Release|Win32`. Open `BorderlessMode.sln` or run:
 
-Command-line build:
-
-```bat
-msbuild BorderlessMode.sln /p:Configuration=Release /p:Platform=Win32
+```powershell
+msbuild BorderlessMode.sln /t:Rebuild /p:Configuration=Release /p:Platform=Win32
 ```
 
-The ASI is written to:
-
-```text
-build\BorderlessMode.asi
-```
-
-The local release archive is:
-
-```text
-build\BorderlessMode-v1.7.0.zip
-```
-
-`build\` is generated output and is intentionally ignored by git.
-
-## Release Integrity
-
-Tagged releases are compiled and packaged by GitHub Actions. Each release
-contains the ZIP archive, a SHA-256 checksum file, and a signed GitHub artifact
-attestation that binds the archive to its source commit and workflow:
-
-```bat
-gh attestation verify BorderlessMode-v1.7.0.zip -R sonochiwa/sa-borderless-mode
-```
+The plugin is written to `build\BorderlessMode.asi` next to a copy of the
+INI.
 
 ## Repository Layout
 
 ```text
-Config\BorderlessMode.ini        Default release config
-src\dllmain.cpp                  DllMain and startup order
-src\version.h                    Version string used by the default config
-src\core\                        Logging, config, module paths, hook helpers
-src\d3d9\                        Present-parameter conversion, D3D9 hooks
-src\window\                      Borderless geometry, window proc, display mode
-src\input\                       Key-state, message-pump and cursor filters
-src\game\                        Everything tied to GTA SA 1.0 US addresses
-src\BorderlessMode.vcxproj       Visual C++ project
-tools\repro.ps1                  Reproduction harness for startup bugs
-vendor\minhook\                  Vendored MinHook sources
-BorderlessMode.sln               Visual Studio solution
+BorderlessMode.sln
+README.md
+CHANGELOG.md
+LICENSE
+.github\workflows\
+  build.yml                     Debug and Release build on every push
+  release.yml                   Tagged release build, checksum and attestation
+Config\
+  BorderlessMode.ini            Canonical configuration, embedded as RCDATA
+src\
+  BorderlessMode.cpp            DllMain and startup order
+  BorderlessMode.rc             Version resource and the embedded INI
+  BorderlessMode.vcxproj
+  resource.h
+  version.h
+  core\                         Logging, configuration, module paths, hook and patch helpers
+  d3d9\                         Present-parameter conversion and the D3D9 device hooks
+  game\                         Everything tied to GTA San Andreas 1.0 US addresses
+  input\                        Key-state, message-pump and cursor filters
+  window\                       Borderless geometry, the window procedure, display-mode guard
+tools\
+  repro.ps1                     Reproduction harness for startup bugs
+vendor\
+  minhook\                      MinHook, compiled into the plugin
 ```
 
-Every hard-coded GTA address lives in `src\game\addresses.h`; nothing outside
-`src\game\` depends on a specific executable.
+Every hard-coded game address lives in `src\game\addresses.h`; nothing
+outside `src\game\` depends on a specific executable.
 
 ## How It Works
 
-On load, BorderlessMode hooks the `Direct3DCreate9` export from the `d3d9.dll`
+On load, the plugin hooks the `Direct3DCreate9` export from the `d3d9.dll`
 used by the game. Once the game creates its `IDirect3D9` object, the plugin hooks
 the `IDirect3D9::CreateDevice` code found through that object's vtable.
 
@@ -251,6 +233,18 @@ survives alt-tab and video setting changes. Hook-side changes are wrapped in SEH
 so unexpected wrapper behavior falls back to the original game call instead of
 crashing the game.
 
+## Release Integrity
+
+Tagged releases are built by GitHub Actions from the tagged commit. Each
+release carries `BorderlessMode-vX.Y.Z.zip`, its SHA-256 in
+`BorderlessMode-vX.Y.Z.zip.sha256` and a signed build-provenance attestation,
+which proves that the archive was produced by this repository's workflow
+from that revision. It does not prove the code is bug-free.
+
+```text
+gh attestation verify BorderlessMode-vX.Y.Z.zip -R sonochiwa/sa-borderless-mode
+```
+
 ## License
 
-[MIT](LICENSE)
+MIT. See [LICENSE](LICENSE).

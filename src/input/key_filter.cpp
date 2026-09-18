@@ -24,8 +24,10 @@ GetKeyboardStateFn g_originalGetKeyboardState = nullptr;
 // foreground (the TAB of an Alt+Tab released a moment after Alt, a mouse
 // button used to click the window, keys typed in another app) must not leak
 // in as fresh presses.
-volatile LONG g_stickyMutedKeys[256] = {};  // polled key-state APIs
-volatile LONG g_msgMutedKeys[256] = {};     // window keyboard messages
+// Polled key-state APIs.
+volatile LONG g_stickyMutedKeys[256] = {};
+// Window keyboard messages.
+volatile LONG g_msgMutedKeys[256] = {};
 
 volatile DWORD g_lastRefocusTick = 0;
 

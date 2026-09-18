@@ -1,5 +1,9 @@
 *.log
 .vs/
 *.user
+.agents/
+.claude/
+.codex/
 
 build/
+references/

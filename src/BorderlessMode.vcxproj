@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -40,7 +40,7 @@
 
   <PropertyGroup>
     <OutDir>$(SolutionDir)build\</OutDir>
-    <IntDir>$(SolutionDir)build\obj\$(Platform)\$(Configuration)\</IntDir>
+    <IntDir>$(SolutionDir)build\obj\$(ProjectName)\$(Platform)\$(Configuration)\</IntDir>
     <TargetName>BorderlessMode</TargetName>
     <TargetExt>.asi</TargetExt>
     <VcpkgEnabled>false</VcpkgEnabled>
@@ -49,37 +49,35 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
       <SDLCheck>false</SDLCheck>
-      <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;_USRDLL;BORDERLESSMODE_EXPORTS;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;_USRDLL;_CRT_SECURE_NO_WARNINGS;WIN32_LEAN_AND_MEAN;NOMINMAX;BORDERLESSMODE_EXPORTS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
-      <ExceptionHandling>Async</ExceptionHandling>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
-      <AdditionalIncludeDirectories>$(SolutionDir)src;$(SolutionDir)vendor\minhook\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <AdditionalIncludeDirectories>$(SolutionDir)src;$(SolutionDir)vendor\minhook\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalDependencies>user32.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <GenerateMapFile>true</GenerateMapFile>
-      <MapFileName>$(OutDir)$(TargetName).map</MapFileName>
     </Link>
   </ItemDefinitionGroup>
 
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile>
       <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>false</SDLCheck>
-      <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;_USRDLL;BORDERLESSMODE_EXPORTS;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;_USRDLL;_CRT_SECURE_NO_WARNINGS;WIN32_LEAN_AND_MEAN;NOMINMAX;BORDERLESSMODE_EXPORTS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
-      <ExceptionHandling>Async</ExceptionHandling>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
-      <AdditionalIncludeDirectories>$(SolutionDir)src;$(SolutionDir)vendor\minhook\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <AdditionalIncludeDirectories>$(SolutionDir)src;$(SolutionDir)vendor\minhook\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -87,12 +85,49 @@
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>false</GenerateDebugInformation>
       <AdditionalDependencies>user32.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <GenerateMapFile>true</GenerateMapFile>
-      <MapFileName>$(OutDir)$(TargetName).map</MapFileName>
     </Link>
   </ItemDefinitionGroup>
 
   <ItemGroup>
+    <ClCompile Include="BorderlessMode.cpp" />
+    <ClCompile Include="core\config.cpp" />
+    <ClCompile Include="core\hook.cpp" />
+    <ClCompile Include="core\log.cpp" />
+    <ClCompile Include="core\memory.cpp" />
+    <ClCompile Include="core\module.cpp" />
+    <ClCompile Include="d3d9\device_hooks.cpp" />
+    <ClCompile Include="d3d9\present_params.cpp" />
+    <ClCompile Include="game\fps_overlay.cpp" />
+    <ClCompile Include="game\patches.cpp" />
+    <ClCompile Include="input\cursor.cpp" />
+    <ClCompile Include="input\key_filter.cpp" />
+    <ClCompile Include="input\message_pump.cpp" />
+    <ClCompile Include="window\borderless.cpp" />
+    <ClCompile Include="window\display_mode.cpp" />
+    <ClCompile Include="window\window_proc.cpp" />
+    <ClCompile Include="..\vendor\minhook\src\buffer.c">
+      <WarningLevel>Level3</WarningLevel>
+      <TreatWarningAsError>false</TreatWarningAsError>
+      <ObjectFileName>$(IntDir)minhook_%(Filename).obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\vendor\minhook\src\hook.c">
+      <WarningLevel>Level3</WarningLevel>
+      <TreatWarningAsError>false</TreatWarningAsError>
+      <ObjectFileName>$(IntDir)minhook_%(Filename).obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\vendor\minhook\src\trampoline.c">
+      <WarningLevel>Level3</WarningLevel>
+      <TreatWarningAsError>false</TreatWarningAsError>
+      <ObjectFileName>$(IntDir)minhook_%(Filename).obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="..\vendor\minhook\src\hde\hde32.c">
+      <WarningLevel>Level3</WarningLevel>
+      <TreatWarningAsError>false</TreatWarningAsError>
+      <ObjectFileName>$(IntDir)minhook_%(Filename).obj</ObjectFileName>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="resource.h" />
     <ClInclude Include="version.h" />
     <ClInclude Include="core\config.h" />
     <ClInclude Include="core\hook.h" />
@@ -111,45 +146,22 @@
     <ClInclude Include="window\display_mode.h" />
     <ClInclude Include="window\window_proc.h" />
   </ItemGroup>
-
   <ItemGroup>
-    <ClCompile Include="dllmain.cpp" />
-    <ClCompile Include="core\config.cpp" />
-    <ClCompile Include="core\hook.cpp" />
-    <ClCompile Include="core\log.cpp" />
-    <ClCompile Include="core\memory.cpp" />
-    <ClCompile Include="core\module.cpp" />
-    <ClCompile Include="d3d9\device_hooks.cpp" />
-    <ClCompile Include="d3d9\present_params.cpp" />
-    <ClCompile Include="game\fps_overlay.cpp" />
-    <ClCompile Include="game\patches.cpp" />
-    <ClCompile Include="input\cursor.cpp" />
-    <ClCompile Include="input\key_filter.cpp" />
-    <ClCompile Include="input\message_pump.cpp" />
-    <ClCompile Include="window\borderless.cpp" />
-    <ClCompile Include="window\display_mode.cpp" />
-    <ClCompile Include="window\window_proc.cpp" />
-    <ClCompile Include="..\vendor\minhook\src\buffer.c">
-      <DisableSpecificWarnings>4100;4201;4244;4310;4701;%(DisableSpecificWarnings)</DisableSpecificWarnings>
-      <ObjectFileName>$(IntDir)minhook_%(Filename).obj</ObjectFileName>
-    </ClCompile>
-    <ClCompile Include="..\vendor\minhook\src\hook.c">
-      <DisableSpecificWarnings>4100;4201;4244;4310;4701;%(DisableSpecificWarnings)</DisableSpecificWarnings>
-      <ObjectFileName>$(IntDir)minhook_%(Filename).obj</ObjectFileName>
-    </ClCompile>
-    <ClCompile Include="..\vendor\minhook\src\trampoline.c">
-      <DisableSpecificWarnings>4100;4201;4244;4310;4701;%(DisableSpecificWarnings)</DisableSpecificWarnings>
-      <ObjectFileName>$(IntDir)minhook_%(Filename).obj</ObjectFileName>
-    </ClCompile>
-    <ClCompile Include="..\vendor\minhook\src\hde\hde32.c">
-      <DisableSpecificWarnings>4100;4201;4244;4310;4701;%(DisableSpecificWarnings)</DisableSpecificWarnings>
-      <ObjectFileName>$(IntDir)minhook_%(Filename).obj</ObjectFileName>
-    </ClCompile>
+    <ResourceCompile Include="BorderlessMode.rc" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="..\Config\BorderlessMode.ini" />
+    <None Include="..\.github\workflows\release.yml" />
+    <None Include="..\CHANGELOG.md" />
+    <None Include="..\LICENSE" />
     <None Include="..\README.md" />
+    <None Include="..\Config\BorderlessMode.ini" />
+    <None Include="..\.github\workflows\build.yml" />
   </ItemGroup>
-
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+
+  <Target Name="CopyReleaseConfig" AfterTargets="Build"
+          Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <Copy SourceFiles="$(SolutionDir)Config\BorderlessMode.ini"
+          DestinationFolder="$(OutDir)" />
+  </Target>
 </Project>

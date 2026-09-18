@@ -21,17 +21,24 @@ struct BytePatch {
 
 struct PatchSetResult {
     enum Status {
-        kAlreadyApplied,      // every site already carries the patched bytes
-        kSignatureMismatch,   // a site matches neither original nor patched
-        kProtectFailed,       // VirtualProtect refused the range
-        kThreadInRange,       // another thread is executing the patch range
-        kWriteFailed,         // the write itself raised an exception
+        // Every site already carries the patched bytes.
+        kAlreadyApplied,
+        // A site matches neither the original nor the patched bytes.
+        kSignatureMismatch,
+        // VirtualProtect refused the range.
+        kProtectFailed,
+        // Another thread is executing the patch range.
+        kThreadInRange,
+        // The write itself raised an exception.
+        kWriteFailed,
         kApplied,
     };
 
     Status status;
-    uintptr_t mismatchAddress;  // valid for kSignatureMismatch
-    size_t written;             // sites written, valid for kApplied
+    // Valid for kSignatureMismatch.
+    uintptr_t mismatchAddress;
+    // Sites written, valid for kApplied.
+    size_t written;
     bool frozeThreads;
     unsigned frozenThreads;
 };

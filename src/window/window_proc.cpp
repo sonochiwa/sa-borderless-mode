@@ -23,7 +23,8 @@ constexpr UINT kBackgroundRestoreDelayMs = 100;
 // Retries the borderless geometry until the game has shown its own window.
 constexpr UINT_PTR kBorderlessRetryTimerId = 0xB0DE1E57;
 constexpr UINT kBorderlessRetryDelayMs = 250;
-constexpr int kBorderlessRetryLimit = 40;  // ~10 s, then give up quietly
+// About ten seconds, then give up quietly.
+constexpr int kBorderlessRetryLimit = 40;
 int g_borderlessRetries = 0;
 
 LRESULT ForwardToGame(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {

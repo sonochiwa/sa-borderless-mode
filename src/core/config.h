@@ -7,7 +7,8 @@ namespace bm {
 struct Config {
     bool logEnabled = false;
     bool fpsHotkeyEnabled = true;
-    UINT fpsHotkeyModifier = VK_MENU;  // Alt
+    // VK_MENU is Alt.
+    UINT fpsHotkeyModifier = VK_MENU;
     UINT fpsHotkeyKey = 0;
 
     // [debug] switches. All default to off, i.e. everything enabled. They
@@ -15,14 +16,22 @@ struct Config {
     // at a time and see which one a game stops tripping over. The borderless
     // conversion itself is deliberately not switchable - without it there is
     // nothing left of the plugin to test.
-    bool disableWindowHook = false;     // the WndProc subclass
-    bool disableInputFilters = false;   // Get(Async)KeyState, GetKeyboardState
-    bool disableMessagePump = false;    // Peek/GetMessage, WH_GETMESSAGE
-    bool disableCursorGuard = false;    // SetCursorPos
-    bool disableDisplayGuard = false;   // ChangeDisplaySettings*
-    bool disableGamePatches = false;    // NoFrameDelay, refresh rate, FPS overlay
-    bool disableBorderlessStyle = false;  // the window restyle and geometry
-    bool disableConversion = false;       // the fullscreen->windowed conversion
+    // The WndProc subclass.
+    bool disableWindowHook = false;
+    // Get(Async)KeyState and GetKeyboardState.
+    bool disableInputFilters = false;
+    // Peek/GetMessage and WH_GETMESSAGE.
+    bool disableMessagePump = false;
+    // SetCursorPos.
+    bool disableCursorGuard = false;
+    // ChangeDisplaySettings*.
+    bool disableDisplayGuard = false;
+    // NoFrameDelay, refresh rate, FPS overlay.
+    bool disableGamePatches = false;
+    // The window restyle and geometry.
+    bool disableBorderlessStyle = false;
+    // The fullscreen to windowed conversion.
+    bool disableConversion = false;
 
     // Declaring the process DPI aware is a precondition for a windowed device
     // on a scaled display, not a preference: without it the game shuts itself

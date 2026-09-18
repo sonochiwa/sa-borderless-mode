@@ -62,7 +62,8 @@ void* ResolveExportFromTable(HMODULE module, const char* name) {
             }
             DWORD rva = functions[ordinals[i]];
             if (rva >= dir.VirtualAddress && rva < dir.VirtualAddress + dir.Size) {
-                return nullptr;  // forwarded export
+                // Forwarded export.
+                return nullptr;
             }
             return const_cast<BYTE*>(base) + rva;
         }

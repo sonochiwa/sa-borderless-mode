@@ -1,6 +1,7 @@
 #pragma once
 
-// Single source of truth for the plugin version. The default INI banner and
-// the release notes are generated from these.
-#define BM_VERSION_STRING "1.7.0"
-#define BM_VERSION_WIDE L"1.7.0"
+#define PLUGIN_VERSION_MAJOR 1
+#define PLUGIN_VERSION_MINOR 7
+#define PLUGIN_VERSION_PATCH 1
+#define PLUGIN_VERSION "1.7.1"
+#define PLUGIN_NAME "Borderless Mode"

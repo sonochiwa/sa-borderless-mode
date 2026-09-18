@@ -1,12 +1,12 @@
-// BorderlessMode.asi - borderless fullscreen windowed mode for GTA San
-// Andreas without capping FPS at the monitor refresh rate.
-//
-// Layout of the sources:
-//   core/    logging, configuration, module paths, hook and patch helpers
-//   d3d9/    present-parameter conversion and the D3D9 device hooks
-//   window/  borderless geometry, the window procedure, display-mode guard
-//   input/   key-state, message-pump and cursor filters
-//   game/    everything that depends on GTA SA 1.0 US addresses
+// The game creates an exclusive fullscreen Direct3D 9 device, which ties
+// its frame rate to the monitor refresh, makes every Alt-Tab a mode switch
+// and confuses overlays and capture tools. The plugin converts the device's
+// present parameters to a windowed swap chain, restyles the game window into
+// a borderless one covering the monitor, and then keeps the game from
+// noticing: display-mode changes, cursor confinement, focus-driven key state
+// and the message pump are filtered so the game behaves as it would have in
+// exclusive mode, while its own frame delay is patched out so the FPS is no
+// longer capped at the refresh rate.
 
 #include "core/config.h"
 #include "core/hook.h"

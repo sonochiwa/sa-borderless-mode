@@ -1,27 +1,14 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
-    <Filter Include="core">
-      <UniqueIdentifier>{1a2b3c00-0000-4000-8000-000000000001}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="d3d9">
-      <UniqueIdentifier>{1a2b3c00-0000-4000-8000-000000000002}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="window">
-      <UniqueIdentifier>{1a2b3c00-0000-4000-8000-000000000003}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="input">
-      <UniqueIdentifier>{1a2b3c00-0000-4000-8000-000000000004}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="game">
-      <UniqueIdentifier>{1a2b3c00-0000-4000-8000-000000000005}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="vendor">
-      <UniqueIdentifier>{1a2b3c00-0000-4000-8000-000000000006}</UniqueIdentifier>
-    </Filter>
+    <Filter Include="core" />
+    <Filter Include="d3d9" />
+    <Filter Include="game" />
+    <Filter Include="input" />
+    <Filter Include="window" />
   </ItemGroup>
-
   <ItemGroup>
+    <ClCompile Include="BorderlessMode.cpp" />
     <ClCompile Include="core\config.cpp">
       <Filter>core</Filter>
     </ClCompile>
@@ -43,14 +30,11 @@
     <ClCompile Include="d3d9\present_params.cpp">
       <Filter>d3d9</Filter>
     </ClCompile>
-    <ClCompile Include="window\borderless.cpp">
-      <Filter>window</Filter>
+    <ClCompile Include="game\fps_overlay.cpp">
+      <Filter>game</Filter>
     </ClCompile>
-    <ClCompile Include="window\display_mode.cpp">
-      <Filter>window</Filter>
-    </ClCompile>
-    <ClCompile Include="window\window_proc.cpp">
-      <Filter>window</Filter>
+    <ClCompile Include="game\patches.cpp">
+      <Filter>game</Filter>
     </ClCompile>
     <ClCompile Include="input\cursor.cpp">
       <Filter>input</Filter>
@@ -61,27 +45,19 @@
     <ClCompile Include="input\message_pump.cpp">
       <Filter>input</Filter>
     </ClCompile>
-    <ClCompile Include="game\fps_overlay.cpp">
-      <Filter>game</Filter>
+    <ClCompile Include="window\borderless.cpp">
+      <Filter>window</Filter>
     </ClCompile>
-    <ClCompile Include="game\patches.cpp">
-      <Filter>game</Filter>
+    <ClCompile Include="window\display_mode.cpp">
+      <Filter>window</Filter>
     </ClCompile>
-    <ClCompile Include="..\vendor\minhook\src\buffer.c">
-      <Filter>vendor</Filter>
-    </ClCompile>
-    <ClCompile Include="..\vendor\minhook\src\hook.c">
-      <Filter>vendor</Filter>
-    </ClCompile>
-    <ClCompile Include="..\vendor\minhook\src\trampoline.c">
-      <Filter>vendor</Filter>
-    </ClCompile>
-    <ClCompile Include="..\vendor\minhook\src\hde\hde32.c">
-      <Filter>vendor</Filter>
+    <ClCompile Include="window\window_proc.cpp">
+      <Filter>window</Filter>
     </ClCompile>
   </ItemGroup>
-
   <ItemGroup>
+    <ClInclude Include="resource.h" />
+    <ClInclude Include="version.h" />
     <ClInclude Include="core\config.h">
       <Filter>core</Filter>
     </ClInclude>
@@ -103,14 +79,14 @@
     <ClInclude Include="d3d9\present_params.h">
       <Filter>d3d9</Filter>
     </ClInclude>
-    <ClInclude Include="window\borderless.h">
-      <Filter>window</Filter>
+    <ClInclude Include="game\addresses.h">
+      <Filter>game</Filter>
     </ClInclude>
-    <ClInclude Include="window\display_mode.h">
-      <Filter>window</Filter>
+    <ClInclude Include="game\fps_overlay.h">
+      <Filter>game</Filter>
     </ClInclude>
-    <ClInclude Include="window\window_proc.h">
-      <Filter>window</Filter>
+    <ClInclude Include="game\patches.h">
+      <Filter>game</Filter>
     </ClInclude>
     <ClInclude Include="input\cursor.h">
       <Filter>input</Filter>
@@ -121,14 +97,25 @@
     <ClInclude Include="input\message_pump.h">
       <Filter>input</Filter>
     </ClInclude>
-    <ClInclude Include="game\addresses.h">
-      <Filter>game</Filter>
+    <ClInclude Include="window\borderless.h">
+      <Filter>window</Filter>
     </ClInclude>
-    <ClInclude Include="game\fps_overlay.h">
-      <Filter>game</Filter>
+    <ClInclude Include="window\display_mode.h">
+      <Filter>window</Filter>
     </ClInclude>
-    <ClInclude Include="game\patches.h">
-      <Filter>game</Filter>
+    <ClInclude Include="window\window_proc.h">
+      <Filter>window</Filter>
     </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="BorderlessMode.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\.github\workflows\release.yml" />
+    <None Include="..\CHANGELOG.md" />
+    <None Include="..\LICENSE" />
+    <None Include="..\README.md" />
+    <None Include="..\Config\BorderlessMode.ini" />
+    <None Include="..\.github\workflows\build.yml" />
   </ItemGroup>
 </Project>

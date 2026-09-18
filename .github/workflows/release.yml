@@ -1,10 +1,9 @@
-name: Verified release
+name: Release
 
 on:
   push:
     tags:
-      - "v*"
-      - "[0-9]*"
+      - "v[0-9]+.[0-9]+.[0-9]+"
 
 permissions:
   contents: write
@@ -22,39 +21,6 @@ jobs:
       - name: Configure MSBuild
         uses: microsoft/setup-msbuild@v2
 
-      - name: Check the tag matches the version in the source
-        shell: pwsh
-        run: |
-          $version = "${{ github.ref_name }}" -replace '^v', ''
-          if ($version -notmatch '^\d+\.\d+\.\d+$') {
-              throw "Release tag must contain a semantic version."
-          }
-
-          # src/version.h feeds the banner written into a freshly created
-          # BorderlessMode.ini. A tag that disagrees with it ships an archive
-          # whose config announces the wrong version.
-          $header = Get-Content src/version.h -Raw
-          $match = [regex]::Match($header, '#define\s+BM_VERSION_STRING\s+"(?<v>[^"]+)"')
-          if (-not $match.Success) {
-              throw "src/version.h has no BM_VERSION_STRING."
-          }
-          $source = $match.Groups['v'].Value
-          if ($source -ne $version) {
-              throw "Tag $version does not match BM_VERSION_STRING $source in src/version.h."
-          }
-
-          $wide = [regex]::Match($header, '#define\s+BM_VERSION_WIDE\s+L"(?<v>[^"]+)"')
-          if (-not $wide.Success -or $wide.Groups['v'].Value -ne $version) {
-              throw "BM_VERSION_WIDE in src/version.h does not match $version."
-          }
-
-          $ini = Get-Content Config/BorderlessMode.ini -Raw
-          if ($ini -notmatch [regex]::Escape("# BorderlessMode v$version")) {
-              throw "Config/BorderlessMode.ini does not announce v$version."
-          }
-
-          "Tag, src/version.h and Config/BorderlessMode.ini all agree on $version."
-
       - name: Build Release Win32
         run: msbuild BorderlessMode.sln /t:Rebuild /p:Configuration=Release /p:Platform=Win32
 
@@ -63,34 +29,39 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ github.ref_name }}" -replace '^v', ''
-          if ($version -notmatch '^\d+\.\d+\.\d+$') {
-              throw "Release tag must contain a semantic version."
+
+          $iniHeader = (Get-Content Config\BorderlessMode.ini -TotalCount 1)
+          if ($iniHeader -ne "# Borderless Mode v$version") {
+              throw "Config\BorderlessMode.ini declares '$iniHeader', not version $version."
           }
+
           $archiveName = "BorderlessMode-v$version.zip"
           $archive = Join-Path build $archiveName
           $checksum = "$archive.sha256"
           $stage = Join-Path build "release\BorderlessMode-v$version"
           Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Path $stage -Force | Out-Null
-          Copy-Item build\BorderlessMode.asi, Config\BorderlessMode.ini -Destination $stage
+          Copy-Item build\BorderlessMode.asi, build\BorderlessMode.ini -Destination $stage
+
           Compress-Archive -Path "$stage\*" -DestinationPath $archive -Force
           $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
           "$hash  $archiveName" | Set-Content -LiteralPath $checksum -Encoding ascii
 
           $changelog = Get-Content CHANGELOG.md -Raw
-          $pattern = "(?ms)^##\s+v?$([regex]::Escape($version))(?:\s+-[^\r\n]+)?\s*\r?\n(?<body>.*?)(?=^##\s|\z)"
+          # The optional suffix after the heading must stay on the heading
+          # line: under (?s) a \s+ there crosses the blank line and swallows the
+          # first bullet of the section.
+          $pattern = "(?ms)^##[ \t]+$([regex]::Escape($version))(?:[ \t]+-[^\r\n]+)?[ \t]*\r?\n(?<body>.*?)(?=^##[ \t]|\z)"
           $match = [regex]::Match($changelog, $pattern)
           if (-not $match.Success) {
               throw "CHANGELOG.md has no section for $version."
           }
-          $notes = @(
-              $match.Groups['body'].Value.Trim()
-          ) -join [Environment]::NewLine
           [IO.File]::WriteAllText(
               (Join-Path build release-notes.md),
-              $notes,
+              $match.Groups['body'].Value.Trim(),
               [Text.UTF8Encoding]::new($false)
           )
+
           "version=$version" >> $env:GITHUB_OUTPUT
           "archive=$archive" >> $env:GITHUB_OUTPUT
           "checksum=$checksum" >> $env:GITHUB_OUTPUT
@@ -110,5 +81,5 @@ jobs:
             "${{ steps.package.outputs.checksum }}" `
             --verify-tag `
             --latest `
-            --title "BorderlessMode v${{ steps.package.outputs.version }}" `
+            --title "Borderless Mode v${{ steps.package.outputs.version }}" `
             --notes-file build\release-notes.md

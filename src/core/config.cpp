@@ -2,7 +2,7 @@
 
 #include "core/log.h"
 #include "core/module.h"
-#include "version.h"
+#include "resource.h"
 
 #include <cstdlib>
 #include <cwchar>
@@ -16,28 +16,6 @@ const wchar_t kFpsCounterSection[] = L"fpsCounter";
 const wchar_t kLegacySection[] = L"BorderlessMode";
 const wchar_t kOlderLegacySection[] = L"SABorderless";
 
-// UTF-16 LE with BOM: the profile APIs read it natively, and text editors
-// stop misdetecting the short file as UTF-16 mojibake.
-const wchar_t kDefaultIni[] =
-    L"\xFEFF"
-    L"# BorderlessMode v" BM_VERSION_WIDE L"\r\n"
-    L"# Created by sonochiwa\r\n"
-    L"# Source code: https://github.com/sonochiwa/sa-borderless-mode\r\n"
-    L"# Default FPS toggle hotkey: Alt + F11\r\n"
-    L"\r\n"
-    L"[general]\r\n"
-    L"log=0\r\n"
-    L"\r\n"
-    L"# Shows GTA's actual in-game FPS. External tools such as NVIDIA\r\n"
-    L"# counters may show the window's refresh rate instead.\r\n"
-    L"# The hotkey is given as decimal Win32 virtual-key codes: 18 is Alt,\r\n"
-    L"# 122 is F11. Set hotkeyModifier=0 for a bare key with no modifier.\r\n"
-    L"[fpsCounter]\r\n"
-    L"show=0\r\n"
-    L"hotkeyEnabled=1\r\n"
-    L"hotkeyModifier=18\r\n"
-    L"hotkeyKey=122\r\n";
-
 Config g_config;
 wchar_t g_iniPath[MAX_PATH] = {};
 volatile LONG g_showFpsOverlay = 0;
@@ -46,8 +24,21 @@ bool BuildIniPath(wchar_t* path, DWORD pathSize) {
     return BuildSiblingPath(L".ini", path, pathSize);
 }
 
+// Writes the RCDATA copy of Config\BorderlessMode.ini byte for byte.
 void CreateDefaultIniIfMissing(const wchar_t* path) {
     if (GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES) {
+        return;
+    }
+
+    const HMODULE self = SelfModule();
+    const HRSRC resource = FindResourceW(self, MAKEINTRESOURCEW(IDR_DEFAULT_INI), RT_RCDATA);
+    if (!resource) {
+        return;
+    }
+    const HGLOBAL handle = LoadResource(self, resource);
+    const DWORD size = SizeofResource(self, resource);
+    const void* data = handle ? LockResource(handle) : nullptr;
+    if (!data || size == 0) {
         return;
     }
 
@@ -58,8 +49,7 @@ void CreateDefaultIniIfMissing(const wchar_t* path) {
     }
 
     DWORD written = 0;
-    WriteFile(file, kDefaultIni, sizeof(kDefaultIni) - sizeof(wchar_t), &written,
-              nullptr);
+    WriteFile(file, data, size, &written, nullptr);
     CloseHandle(file);
 }
 
