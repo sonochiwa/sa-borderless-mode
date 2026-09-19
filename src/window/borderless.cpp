@@ -1,8 +1,5 @@
 #include "window/borderless.h"
 
-#include "core/config.h"
-#include "core/log.h"
-
 namespace bm {
 namespace {
 
@@ -63,8 +60,6 @@ void TakeForeground(HWND window) {
     }
     BringWindowToTop(window);
     SetFocus(window);
-    Log("borderless foreground/focus requested: foregroundBefore=0x%p",
-        foreground);
 }
 
 // The window is shown before the game has presented a single frame, so
@@ -78,11 +73,7 @@ void PaintUnpaintedAreaBlack(HWND window) {
     if (!black) {
         return;
     }
-    const ULONG_PTR previous = SetClassLongPtrW(
-        window, GCLP_HBRBACKGROUND, reinterpret_cast<LONG_PTR>(black));
-    Log("borderless background brush: window=0x%p previous=0x%p black=0x%p",
-        window, reinterpret_cast<void*>(previous),
-        reinterpret_cast<void*>(black));
+    SetClassLongPtrW(window, GCLP_HBRBACKGROUND, reinterpret_cast<LONG_PTR>(black));
 }
 
 }  // namespace
@@ -120,16 +111,10 @@ void ResetBorderlessState() {
     g_borderlessApplied = false;
     g_borderlessPending = false;
     g_windowPutAway = false;
-    Log("borderless state reset");
 }
 
 void ApplyBorderlessStyle(HWND window) {
-    if (GetConfig().disableBorderlessStyle) {
-        Log("borderless style disabled by config");
-        return;
-    }
     if (!window || !IsWindow(window)) {
-        Log("borderless skipped: invalid window=0x%p", window);
         return;
     }
 
@@ -147,8 +132,6 @@ void ApplyBorderlessStyle(HWND window) {
     const bool visible = IsWindowVisible(window) != FALSE;
     if (iconic || (!firstApply && !visible)) {
         g_borderlessPending = true;
-        Log("borderless deferred: window=0x%p iconic=%d visible=%d first=%d",
-            window, iconic ? 1 : 0, visible ? 1 : 0, firstApply ? 1 : 0);
         return;
     }
     g_borderlessPending = false;
@@ -160,8 +143,6 @@ void ApplyBorderlessStyle(HWND window) {
 
     HMONITOR handle = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
     if (!GetMonitorInfoW(handle, &monitor)) {
-        Log("borderless skipped: GetMonitorInfo failed window=0x%p monitor=0x%p error=%lu",
-            window, handle, GetLastError());
         return;
     }
 
@@ -182,7 +163,6 @@ void ApplyBorderlessStyle(HWND window) {
     SetWindowLongW(window, GWL_STYLE, style);
 
     LONG exStyle = GetWindowLongW(window, GWL_EXSTYLE);
-    LONG oldExStyle = exStyle;
     exStyle &= ~kFrameExStyleBits;
     SetWindowLongW(window, GWL_EXSTYLE, exStyle);
 
@@ -201,17 +181,6 @@ void ApplyBorderlessStyle(HWND window) {
         positionFlags |= SWP_SHOWWINDOW;
     }
 
-    Log("borderless applying: window=0x%p monitor=(%ld,%ld)-(%ld,%ld) "
-        "size=%dx%d style=0x%08lX->0x%08lX exstyle=0x%08lX->0x%08lX first=%d "
-        "foreground=%d flags=0x%08X",
-        window,
-        monitor.rcMonitor.left, monitor.rcMonitor.top,
-        monitor.rcMonitor.right, monitor.rcMonitor.bottom,
-        width, height,
-        oldStyle, style, oldExStyle, exStyle,
-        firstApply ? 1 : 0,
-        gameForeground ? 1 : 0, positionFlags);
-
     SetWindowPos(window, gameForeground ? HWND_TOP : nullptr,
                  monitor.rcMonitor.left, monitor.rcMonitor.top,
                  width, height,
@@ -222,7 +191,6 @@ void ApplyBorderlessStyle(HWND window) {
     }
 
     g_borderlessApplied = true;
-    Log("borderless applied");
 }
 
 }  // namespace bm

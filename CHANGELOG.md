@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.8.0
+
+- Removed the INI, the log, the debug switches and the FPS counter; the
+  plugin has nothing to configure.
+
 ## 1.7.1
 
 - Changed the INI to UTF-8; it is now created from the canonical file

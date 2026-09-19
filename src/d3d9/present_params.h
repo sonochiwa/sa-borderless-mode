@@ -10,9 +10,7 @@ enum ConvertMode {
     ConvertVsyncOnly,
 };
 
-const char* ConvertModeName(ConvertMode mode);
 
-void LogPresentParams(const char* label, const D3DPRESENT_PARAMETERS* params);
 
 // Fills `converted` with a fixed-up copy of the caller's parameters. The
 // caller's struct is never written: for GTA SA it is a persistent global

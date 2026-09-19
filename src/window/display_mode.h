@@ -7,7 +7,7 @@ void CaptureDesktopMode();
 
 // Someone (game, driver, another process) may still switch the real display
 // mode behind the windowed device; put the desktop mode back immediately.
-void RestoreDesktopMode(const char* reason);
+void RestoreDesktopMode();
 
 // While borderless is active the desktop mode must stay untouched. GTA SA
 // (and the AppCompat shims around d3d9) still believe the game runs exclusive

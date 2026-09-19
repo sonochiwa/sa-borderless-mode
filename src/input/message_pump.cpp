@@ -1,8 +1,6 @@
 #include "input/message_pump.h"
 
-#include "core/config.h"
 #include "core/hook.h"
-#include "core/log.h"
 #include "core/module.h"
 #include "input/key_filter.h"
 
@@ -29,7 +27,6 @@ void FilterQueuedInputMessage(MSG* msg) {
         // event while the game reads its queue, before SA-MP's window-mode
         // handler can act on it.
         if (msg->message == WM_SYSKEYUP && msg->wParam == VK_RETURN) {
-            Log("pump WM_SYSKEYUP/VK_RETURN neutralized");
             msg->message = WM_NULL;
             return;
         }
@@ -43,8 +40,6 @@ void FilterQueuedInputMessage(MSG* msg) {
         }
         bool altOrWin = AltOrWinHeldAsync();
         if (altOrWin || TabRefocusGraceActive()) {
-            Log("pump TAB %s neutralized (%s)", down ? "keydown" : "keyup",
-                altOrWin ? "alt/win" : "grace");
             msg->message = WM_NULL;
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -99,10 +94,6 @@ LRESULT CALLBACK GetMsgHookProc(int code, WPARAM wParam, LPARAM lParam) {
 }  // namespace
 
 void HookMessagePump() {
-    if (GetConfig().disableMessagePump) {
-        Log("message pump filter disabled by config");
-        return;
-    }
     HMODULE user32 = GetModuleHandleW(L"user32.dll");
     if (!user32) {
         return;
@@ -122,18 +113,12 @@ void HookMessagePump() {
 }
 
 void InstallGetMessageHook(HWND window) {
-    if (GetConfig().disableMessagePump) {
-        return;
-    }
     if (g_getMessageHook || !window || !IsWindow(window)) {
         return;
     }
     DWORD threadId = GetWindowThreadProcessId(window, nullptr);
     g_getMessageHook = SetWindowsHookExW(WH_GETMESSAGE, &GetMsgHookProc,
                                          SelfModule(), threadId);
-    Log("WH_GETMESSAGE hook: hook=0x%p thread=%lu error=%lu",
-        g_getMessageHook, threadId,
-        g_getMessageHook ? 0 : GetLastError());
 }
 
 void RemoveGetMessageHook() {

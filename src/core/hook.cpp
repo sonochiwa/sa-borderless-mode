@@ -1,6 +1,5 @@
 #include "core/hook.h"
 
-#include "core/log.h"
 #include "core/memory.h"
 #include "MinHook.h"
 
@@ -8,16 +7,13 @@
 
 namespace bm {
 
-bool InstallHook(void* target, void* detour, void** original, const char* name) {
+bool InstallHook(void* target, void* detour, void** original) {
     if (!target) {
-        Log("%s hook skipped: null target", name);
         return false;
     }
 
     MH_STATUS create = MH_CreateHook(target, detour, original);
     MH_STATUS queue = create == MH_OK ? MH_QueueEnableHook(target) : create;
-    Log("%s hook: target=0x%p create=%d queue=%d original=0x%p",
-        name, target, create, queue, *original);
     if (create == MH_OK && queue == MH_OK) {
         return true;
     }
@@ -28,7 +24,6 @@ bool InstallHook(void* target, void* detour, void** original, const char* name) 
 
 bool ApplyQueuedHooks() {
     MH_STATUS status = MH_ApplyQueued();
-    Log("queued hooks applied: status=%d", status);
     return status == MH_OK;
 }
 
@@ -78,30 +73,18 @@ bool InstallExportHook(HMODULE module, const char* name, void* detour,
     void* fromTable = ResolveExportFromTable(module, name);
     void* target = fromTable ? fromTable : fromGetProc;
     if (!target) {
-        Log("%s hook skipped: export not found", name);
         return false;
     }
-    if (fromGetProc && fromGetProc != target) {
-        char targetText[kCallerTextSize] = {};
-        char getProcText[kCallerTextSize] = {};
-        FormatCallerAddress(target, targetText, sizeof(targetText));
-        FormatCallerAddress(fromGetProc, getProcText, sizeof(getProcText));
-        Log("%s export mismatch: table=%s GetProcAddress=%s (hooking table address)",
-            name, targetText, getProcText);
-    }
-    return InstallHook(target, detour, original, name);
+    return InstallHook(target, detour, original);
 }
 
 bool InstallSignatureHook(uintptr_t address, const unsigned char* signature,
-                          size_t signatureSize, void* detour, void** original,
-                          const char* name) {
+                          size_t signatureSize, void* detour, void** original) {
     void* target = reinterpret_cast<void*>(address);
     if (!BytesMatch(target, signature, signatureSize)) {
-        Log("%s hook skipped: signature mismatch at 0x%08lX", name,
-            static_cast<unsigned long>(address));
         return false;
     }
-    return InstallHook(target, detour, original, name);
+    return InstallHook(target, detour, original);
 }
 
 }  // namespace bm

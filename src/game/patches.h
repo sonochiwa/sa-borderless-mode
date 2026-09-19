@@ -27,6 +27,6 @@ void HookApplyVideoMode();
 //
 // Does nothing when the flag is already set, when game patches are disabled,
 // or when the executable is not GTA SA 1.0 US.
-void RestoreGameInFocus(const char* reason);
+void RestoreGameInFocus();
 
 }  // namespace bm

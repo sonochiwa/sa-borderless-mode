@@ -1,8 +1,6 @@
 #include "input/key_filter.h"
 
-#include "core/config.h"
 #include "core/hook.h"
-#include "core/log.h"
 #include "window/borderless.h"
 
 #include <intrin.h>
@@ -33,20 +31,6 @@ volatile DWORD g_lastRefocusTick = 0;
 
 constexpr DWORD kTabRefocusGraceMs = 200;
 
-void LogTabDownRead(const char* api, void* caller, bool suppressed) {
-    static volatile DWORD lastLogTick = 0;
-    DWORD now = GetTickCount();
-    DWORD last = lastLogTick;
-    if (last != 0 && now - last < 250) {
-        return;
-    }
-    lastLogTick = now;
-    char callerText[kCallerTextSize] = {};
-    FormatCallerAddress(caller, callerText, sizeof(callerText));
-    Log("TAB down read via %s caller=%s%s", api, callerText,
-        suppressed ? " (suppressed)" : "");
-}
-
 // Decides whether a polled read must present the key as released.
 // `reportedDown` is what the calling API itself sees for the key, so a
 // source whose state lags behind the physical release keeps muting until
@@ -74,8 +58,6 @@ bool ForegroundBelongsToGame() {
 
     static LONG lastLogged = 1;
     if (InterlockedExchange(&lastLogged, game) != game) {
-        Log("polled input %s: foreground=0x%p",
-            game ? "restored" : "muted", GetForegroundWindow());
         if (game) {
             MuteKeysHeldAtRefocus();
         }
@@ -97,9 +79,6 @@ SHORT WINAPI HookedGetKeyState(int virtualKey) {
                           g_originalGetKeyState(VK_LWIN) |
                           g_originalGetKeyState(VK_RWIN)) & 0x8000) != 0;
         bool suppress = altOrWin || TabRefocusGraceActive();
-        if (state & 0x8000) {
-            LogTabDownRead("GetKeyState", _ReturnAddress(), suppress);
-        }
         if (suppress) {
             return 0;
         }
@@ -117,9 +96,6 @@ SHORT WINAPI HookedGetAsyncKeyState(int virtualKey) {
     SHORT state = g_originalGetAsyncKeyState(virtualKey);
     if (virtualKey == VK_TAB) {
         bool suppress = AltOrWinHeldAsync() || TabRefocusGraceActive();
-        if (state & 0x8000) {
-            LogTabDownRead("GetAsyncKeyState", _ReturnAddress(), suppress);
-        }
         if (suppress) {
             return 0;
         }
@@ -142,7 +118,6 @@ BOOL WINAPI HookedGetKeyboardState(PBYTE keyState) {
                                       keyState[VK_RMENU] | keyState[VK_LWIN] |
                                       keyState[VK_RWIN]) & 0x80) != 0;
                     bool suppress = altOrWin || TabRefocusGraceActive();
-                    LogTabDownRead("GetKeyboardState", _ReturnAddress(), suppress);
                     if (suppress) {
                         keyState[VK_TAB] = 0;
                     }
@@ -181,16 +156,11 @@ void MuteKeysHeldAtRefocus() {
     if (!g_originalGetAsyncKeyState) {
         return;
     }
-    int muted = 0;
     for (int key = 1; key < 256; ++key) {
         if (g_originalGetAsyncKeyState(key) & 0x8000) {
             InterlockedExchange(&g_stickyMutedKeys[key], 1);
             InterlockedExchange(&g_msgMutedKeys[key], 1);
-            ++muted;
         }
-    }
-    if (muted) {
-        Log("refocus: muted %d held key(s) until released", muted);
     }
 }
 
@@ -204,10 +174,6 @@ void ClearMessageKeyMute(int virtualKey) {
 }
 
 void HookKeyStateApis() {
-    if (GetConfig().disableInputFilters) {
-        Log("input filters disabled by config");
-        return;
-    }
     HMODULE user32 = GetModuleHandleW(L"user32.dll");
     if (!user32) {
         return;

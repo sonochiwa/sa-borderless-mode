@@ -1,8 +1,6 @@
 #include "window/display_mode.h"
 
-#include "core/config.h"
 #include "core/hook.h"
-#include "core/log.h"
 #include "window/borderless.h"
 
 #include <intrin.h>
@@ -29,16 +27,6 @@ ChangeDisplaySettingsExWFn g_originalChangeDisplaySettingsExW = nullptr;
 
 DEVMODEW g_desktopMode = {};
 bool g_haveDesktopMode = false;
-
-void LogDisplayModeRequest(const char* label, void* caller,
-                           DWORD fields, DWORD width, DWORD height,
-                           DWORD frequency, DWORD flags, bool normalized) {
-    char callerText[kCallerTextSize] = {};
-    FormatCallerAddress(caller, callerText, sizeof(callerText));
-    Log("%s: mode=%ux%u@%u fields=0x%08lX flags=0x%08lX caller=%s%s",
-        label, width, height, frequency, fields, flags, callerText,
-        normalized ? " -> normalizing to desktop mode" : "");
-}
 
 // Suppressing these calls outright freezes the AppCompat path inside d3d9
 // (DWM8And16BitMitigation shim), so forward them with the desktop mode
@@ -100,8 +88,6 @@ LONG WINAPI HookedChangeDisplaySettingsA(DEVMODEA* devMode, DWORD flags) {
     DWORD fields = 0, width = 0, height = 0, frequency = 0;
     ReadDevModeA(devMode, &fields, &width, &height, &frequency);
     bool normalize = ShouldNormalize(devMode);
-    LogDisplayModeRequest("ChangeDisplaySettingsA", _ReturnAddress(),
-                          fields, width, height, frequency, flags, normalize);
     if (normalize) {
         DEVMODEA desktop;
         BuildDesktopDevModeA(&desktop);
@@ -114,8 +100,6 @@ LONG WINAPI HookedChangeDisplaySettingsW(DEVMODEW* devMode, DWORD flags) {
     DWORD fields = 0, width = 0, height = 0, frequency = 0;
     ReadDevModeW(devMode, &fields, &width, &height, &frequency);
     bool normalize = ShouldNormalize(devMode);
-    LogDisplayModeRequest("ChangeDisplaySettingsW", _ReturnAddress(),
-                          fields, width, height, frequency, flags, normalize);
     if (normalize) {
         DEVMODEW desktop;
         BuildDesktopDevModeW(&desktop);
@@ -130,8 +114,6 @@ LONG WINAPI HookedChangeDisplaySettingsExA(LPCSTR device, DEVMODEA* devMode,
     DWORD fields = 0, width = 0, height = 0, frequency = 0;
     ReadDevModeA(devMode, &fields, &width, &height, &frequency);
     bool normalize = ShouldNormalize(devMode);
-    LogDisplayModeRequest("ChangeDisplaySettingsExA", _ReturnAddress(),
-                          fields, width, height, frequency, flags, normalize);
     if (normalize) {
         DEVMODEA desktop;
         BuildDesktopDevModeA(&desktop);
@@ -147,8 +129,6 @@ LONG WINAPI HookedChangeDisplaySettingsExW(LPCWSTR device, DEVMODEW* devMode,
     DWORD fields = 0, width = 0, height = 0, frequency = 0;
     ReadDevModeW(devMode, &fields, &width, &height, &frequency);
     bool normalize = ShouldNormalize(devMode);
-    LogDisplayModeRequest("ChangeDisplaySettingsExW", _ReturnAddress(),
-                          fields, width, height, frequency, flags, normalize);
     if (normalize) {
         DEVMODEW desktop;
         BuildDesktopDevModeW(&desktop);
@@ -164,13 +144,9 @@ void CaptureDesktopMode() {
     g_desktopMode.dmSize = sizeof(g_desktopMode);
     g_haveDesktopMode =
         EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &g_desktopMode) != FALSE;
-    Log("desktop mode captured: %ux%u@%u bpp=%u have=%d",
-        g_desktopMode.dmPelsWidth, g_desktopMode.dmPelsHeight,
-        g_desktopMode.dmDisplayFrequency, g_desktopMode.dmBitsPerPel,
-        g_haveDesktopMode ? 1 : 0);
 }
 
-void RestoreDesktopMode(const char* reason) {
+void RestoreDesktopMode() {
     if (!g_haveDesktopMode || !BorderlessApplied()) {
         return;
     }
@@ -178,16 +154,8 @@ void RestoreDesktopMode(const char* reason) {
     DEVMODEW current = {};
     current.dmSize = sizeof(current);
     if (!EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &current)) {
-        Log("display restore skipped: EnumDisplaySettings failed (%s)", reason);
         return;
     }
-
-    Log("display mode check (%s): current=%ux%u@%u bpp=%u desktop=%ux%u@%u bpp=%u",
-        reason,
-        current.dmPelsWidth, current.dmPelsHeight,
-        current.dmDisplayFrequency, current.dmBitsPerPel,
-        g_desktopMode.dmPelsWidth, g_desktopMode.dmPelsHeight,
-        g_desktopMode.dmDisplayFrequency, g_desktopMode.dmBitsPerPel);
 
     if (current.dmPelsWidth == g_desktopMode.dmPelsWidth &&
         current.dmPelsHeight == g_desktopMode.dmPelsHeight &&
@@ -197,20 +165,14 @@ void RestoreDesktopMode(const char* reason) {
     }
 
     if (!g_originalChangeDisplaySettingsW) {
-        Log("display restore skipped: ChangeDisplaySettingsW trampoline missing");
         return;
     }
 
     DEVMODEW restore = g_desktopMode;
-    LONG result = g_originalChangeDisplaySettingsW(&restore, 0);
-    Log("display restore: result=%ld", result);
+    g_originalChangeDisplaySettingsW(&restore, 0);
 }
 
 void HookChangeDisplaySettings() {
-    if (GetConfig().disableDisplayGuard) {
-        Log("display guard disabled by config");
-        return;
-    }
     HMODULE user32 = GetModuleHandleW(L"user32.dll");
     if (!user32) {
         return;

@@ -1,8 +1,6 @@
 #include "game/patches.h"
 
-#include "core/config.h"
 #include "core/hook.h"
-#include "core/log.h"
 #include "core/memory.h"
 #include "game/addresses.h"
 
@@ -60,11 +58,7 @@ int __cdecl HookedApplyVideoMode(void* arg1, void* arg2, void* arg3) {
 }  // namespace
 
 void ApplyNoFrameDelay() {
-    if (GetConfig().disableGamePatches) {
-        return;
-    }
     if (!game::IsSupportedExecutable()) {
-        Log("NoFrameDelay skipped: module base is not 0x00400000");
         return;
     }
 
@@ -77,35 +71,23 @@ void ApplyNoFrameDelay() {
         case PatchSetResult::kAlreadyApplied:
             break;
         case PatchSetResult::kApplied:
-            Log("NoFrameDelay patched: sites=%u frozen=%u threads=%u",
-                static_cast<unsigned>(result.written),
-                result.frozeThreads ? 1u : 0u, result.frozenThreads);
             break;
         case PatchSetResult::kSignatureMismatch:
-            Log("NoFrameDelay skipped: signature mismatch at 0x%08lX",
-                static_cast<unsigned long>(result.mismatchAddress));
             break;
         case PatchSetResult::kProtectFailed:
-            Log("NoFrameDelay failed: VirtualProtect error=%lu", GetLastError());
             break;
         case PatchSetResult::kThreadInRange:
             // A later call retries; the game is left running unpatched
             // meanwhile, which is correct behaviour rather than a
             // half-applied patch.
-            Log("NoFrameDelay deferred: a thread is executing the patch range");
             break;
         case PatchSetResult::kWriteFailed:
-            Log("NoFrameDelay failed: write raised an exception");
             break;
     }
 }
 
 bool UpdateGameRefreshRate() {
-    if (GetConfig().disableGamePatches) {
-        return false;
-    }
     if (!game::IsSupportedExecutable()) {
-        Log("RefreshRateFix skipped: module base is not 0x00400000");
         return false;
     }
 
@@ -113,7 +95,6 @@ bool UpdateGameRefreshRate() {
     mode.dmSize = sizeof(mode);
     if (!EnumDisplaySettingsExW(nullptr, ENUM_CURRENT_SETTINGS, &mode, 0) ||
         mode.dmDisplayFrequency <= 1) {
-        Log("RefreshRateFix skipped: desktop mode query failed");
         return false;
     }
 
@@ -121,18 +102,12 @@ bool UpdateGameRefreshRate() {
     __try {
         *gameRefreshRate = mode.dmDisplayFrequency;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        Log("RefreshRateFix failed writing game refresh rate");
         return false;
     }
-    Log("RefreshRateFix set game refresh rate to %u Hz",
-        mode.dmDisplayFrequency);
     return true;
 }
 
-void RestoreGameInFocus(const char* reason) {
-    if (GetConfig().disableGamePatches) {
-        return;
-    }
+void RestoreGameInFocus() {
     if (!game::IsSupportedExecutable()) {
         return;
     }
@@ -143,26 +118,18 @@ void RestoreGameInFocus(const char* reason) {
                     sizeof(game::kGameInFocusClearSignature))) {
         if (!loggedMismatch) {
             loggedMismatch = true;
-            Log("focus flag skipped: signature mismatch at 0x%08lX",
-                static_cast<unsigned long>(game::kGameInFocusClearSite));
         }
         return;
     }
 
     const int result = SetGameInFocusFlag();
     if (result > 0) {
-        Log("game focus flag restored: %s", reason);
     } else if (result < 0) {
-        Log("game focus flag write failed: %s", reason);
     }
 }
 
 void HookApplyVideoMode() {
-    if (GetConfig().disableGamePatches) {
-        return;
-    }
     if (!game::IsSupportedExecutable()) {
-        Log("RefreshRateFix hook skipped: module base is not 0x00400000");
         return;
     }
 
@@ -170,8 +137,7 @@ void HookApplyVideoMode() {
                          game::kApplyVideoModeSignature,
                          sizeof(game::kApplyVideoModeSignature),
                          reinterpret_cast<void*>(&HookedApplyVideoMode),
-                         reinterpret_cast<void**>(&g_originalApplyVideoMode),
-                         "ApplyVideoMode");
+                         reinterpret_cast<void**>(&g_originalApplyVideoMode));
 }
 
 }  // namespace bm

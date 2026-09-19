@@ -9,13 +9,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="BorderlessMode.cpp" />
-    <ClCompile Include="core\config.cpp">
-      <Filter>core</Filter>
-    </ClCompile>
     <ClCompile Include="core\hook.cpp">
-      <Filter>core</Filter>
-    </ClCompile>
-    <ClCompile Include="core\log.cpp">
       <Filter>core</Filter>
     </ClCompile>
     <ClCompile Include="core\memory.cpp">
@@ -29,9 +23,6 @@
     </ClCompile>
     <ClCompile Include="d3d9\present_params.cpp">
       <Filter>d3d9</Filter>
-    </ClCompile>
-    <ClCompile Include="game\fps_overlay.cpp">
-      <Filter>game</Filter>
     </ClCompile>
     <ClCompile Include="game\patches.cpp">
       <Filter>game</Filter>
@@ -58,13 +49,7 @@
   <ItemGroup>
     <ClInclude Include="resource.h" />
     <ClInclude Include="version.h" />
-    <ClInclude Include="core\config.h">
-      <Filter>core</Filter>
-    </ClInclude>
     <ClInclude Include="core\hook.h">
-      <Filter>core</Filter>
-    </ClInclude>
-    <ClInclude Include="core\log.h">
       <Filter>core</Filter>
     </ClInclude>
     <ClInclude Include="core\memory.h">
@@ -80,9 +65,6 @@
       <Filter>d3d9</Filter>
     </ClInclude>
     <ClInclude Include="game\addresses.h">
-      <Filter>game</Filter>
-    </ClInclude>
-    <ClInclude Include="game\fps_overlay.h">
       <Filter>game</Filter>
     </ClInclude>
     <ClInclude Include="game\patches.h">
@@ -115,7 +97,6 @@
     <None Include="..\CHANGELOG.md" />
     <None Include="..\LICENSE" />
     <None Include="..\README.md" />
-    <None Include="..\Config\BorderlessMode.ini" />
     <None Include="..\.github\workflows\build.yml" />
   </ItemGroup>
 </Project>

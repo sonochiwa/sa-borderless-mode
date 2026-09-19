@@ -1,8 +1,5 @@
 #include "d3d9/present_params.h"
 
-#include "core/config.h"
-#include "core/log.h"
-
 namespace bm {
 namespace {
 
@@ -34,57 +31,10 @@ void ApplyWindowedPresentParams(D3DPRESENT_PARAMETERS* params) {
 
 }  // namespace
 
-const char* ConvertModeName(ConvertMode mode) {
-    switch (mode) {
-        case ConvertFullscreen:
-            return "fullscreen-to-borderless";
-        case ConvertVsyncOnly:
-            return "vsync-only";
-        default:
-            return "none";
-    }
-}
-
-void LogPresentParams(const char* label, const D3DPRESENT_PARAMETERS* params) {
-    if (!LogActive()) {
-        return;
-    }
-
-    __try {
-        if (!params) {
-            Log("%s params=null", label);
-            return;
-        }
-
-        Log("%s Windowed=%u BackBuffer=%ux%u Format=%u Count=%u "
-            "SwapEffect=%u hDeviceWindow=0x%p AutoDepth=%u DepthFormat=%u "
-            "Refresh=%u Interval=%u Flags=0x%08X",
-            label,
-            params->Windowed,
-            params->BackBufferWidth,
-            params->BackBufferHeight,
-            params->BackBufferFormat,
-            params->BackBufferCount,
-            params->SwapEffect,
-            params->hDeviceWindow,
-            params->EnableAutoDepthStencil,
-            params->AutoDepthStencilFormat,
-            params->FullScreen_RefreshRateInHz,
-            params->PresentationInterval,
-            params->Flags);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        Log("%s params=<exception while reading>", label);
-    }
-}
-
 ConvertMode ConvertPresentParams(const D3DPRESENT_PARAMETERS* source,
                                  D3DPRESENT_PARAMETERS* converted) {
-    if (GetConfig().disableConversion) {
-        return ConvertNone;
-    }
     __try {
         if (!source) {
-            Log("convert skipped: params=null");
             return ConvertNone;
         }
 
@@ -107,7 +57,6 @@ ConvertMode ConvertPresentParams(const D3DPRESENT_PARAMETERS* source,
         ApplyWindowedPresentParams(converted);
         return ConvertFullscreen;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        Log("convert failed with exception");
         return ConvertNone;
     }
 }
@@ -123,10 +72,8 @@ void RememberAppliedParams(const D3DPRESENT_PARAMETERS* params) {
         if (params) {
             g_appliedParams = *params;
             g_haveAppliedParams = true;
-            LogPresentParams("remembered", params);
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        Log("remember params failed with exception");
     }
 }
 
@@ -140,7 +87,6 @@ bool IsRedundantReset(IDirect3DDevice9* device,
         return SameDisplayMode(*params, g_appliedParams) &&
                cooperative == D3D_OK;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        Log("redundant reset check failed with exception");
         return false;
     }
 }

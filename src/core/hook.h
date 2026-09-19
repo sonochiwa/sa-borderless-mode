@@ -11,7 +11,7 @@ namespace bm {
 // callers can treat a null trampoline as "feature unavailable".
 //
 // The hook is not live until ApplyQueuedHooks() runs.
-bool InstallHook(void* target, void* detour, void** original, const char* name);
+bool InstallHook(void* target, void* detour, void** original);
 
 // Activates every queued hook in a single pass.
 //
@@ -36,7 +36,6 @@ bool InstallExportHook(HMODULE module, const char* name, void* detour,
 // Hooks a fixed address after verifying the bytes there, so an unexpected
 // executable is left alone instead of being patched blindly.
 bool InstallSignatureHook(uintptr_t address, const unsigned char* signature,
-                          size_t signatureSize, void* detour, void** original,
-                          const char* name);
+                          size_t signatureSize, void* detour, void** original);
 
 }  // namespace bm
