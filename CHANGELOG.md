@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.8.1
+
+- Added `README.txt` to the release archive.
+
 ## 1.8.0
 
 - Removed the INI, the log, the debug switches and the FPS counter; the
