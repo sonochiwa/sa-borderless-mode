@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.9.0
+
+- Fixed the NVIDIA App overlay losing the game after Alt+Tab, which left its
+  FPS counter frozen or missing.
+- Restored the FPS counter; type `FPSCOUNTER` in game to show or hide it,
+  `BorderlessMode.ini` holds its settings.
+
 ## 1.8.1
 
 - Added `README.txt` to the release archive.
