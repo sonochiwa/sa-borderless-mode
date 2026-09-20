@@ -43,6 +43,15 @@ int SetGameInFocusFlag() {
     }
 }
 
+// Kept apart from its caller for the same reason as SetGameInFocusFlag.
+int ReadGameInFocusFlagUnchecked() {
+    __try {
+        return *reinterpret_cast<DWORD*>(game::kGameInFocus) != 0 ? 1 : 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return -1;
+    }
+}
+
 int __cdecl HookedApplyVideoMode(void* arg1, void* arg2, void* arg3) {
     // Matches RefreshRateFixByDarkP1xel32: GTA reads this global while
     // rebuilding the selected video mode.
@@ -126,6 +135,16 @@ void RestoreGameInFocus() {
     if (result > 0) {
     } else if (result < 0) {
     }
+}
+
+int ReadGameInFocusFlag() {
+    if (!game::IsSupportedExecutable() ||
+        !BytesMatch(reinterpret_cast<const void*>(game::kGameInFocusClearSite),
+                    game::kGameInFocusClearSignature,
+                    sizeof(game::kGameInFocusClearSignature))) {
+        return -1;
+    }
+    return ReadGameInFocusFlagUnchecked();
 }
 
 void HookApplyVideoMode() {

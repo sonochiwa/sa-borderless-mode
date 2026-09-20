@@ -29,4 +29,9 @@ void HookApplyVideoMode();
 // or when the executable is not GTA SA 1.0 US.
 void RestoreGameInFocus();
 
+// Reads GTA's "the window has input focus" flag: 1 while the game runs its
+// frame loop, 0 while it sits in the unfocused idle loop, -1 when the flag
+// cannot be trusted (not GTA SA 1.0 US, or the anchor bytes do not match).
+int ReadGameInFocusFlag();
+
 }  // namespace bm

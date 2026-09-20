@@ -12,6 +12,7 @@ namespace bm {
 namespace {
 
 WNDPROC g_previousWndProc = nullptr;
+HWND g_hookedWindow = nullptr;
 BOOL g_windowIsUnicode = FALSE;
 
 constexpr UINT_PTR kBackgroundRestoreTimerId = 0xB0DE1E56;
@@ -23,6 +24,14 @@ constexpr UINT kBorderlessRetryDelayMs = 250;
 // About ten seconds, then give up quietly.
 constexpr int kBorderlessRetryLimit = 40;
 int g_borderlessRetries = 0;
+
+// Presents the last frame again while the game idles in the background. GTA
+// pumps its message queue every 100 ms in that state and nothing else, so a
+// window timer is the one thing that still runs on the game thread. Half a
+// second keeps well inside the three seconds after which the NVIDIA App
+// overlay gives up on a borderless window that stopped presenting.
+constexpr UINT_PTR kIdlePresentTimerId = 0xB0DE1E58;
+constexpr UINT kIdlePresentIntervalMs = 500;
 
 LRESULT ForwardToGame(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
     if (!g_previousWndProc) {
@@ -141,6 +150,24 @@ void HandleShowStateMessage(HWND window, UINT message, WPARAM wParam) {
             break;
         default:
             break;
+    }
+}
+
+// True while the game is sitting in its unfocused idle loop instead of
+// rendering. On the supported executable that is exactly GTA's own flag; on
+// any other, the foreground application decides, which is what GTA bases the
+// flag on anyway.
+bool GameIdling() {
+    const int inFocus = ReadGameInFocusFlag();
+    if (inFocus >= 0) {
+        return inFocus == 0;
+    }
+    return !GameOwnsForeground();
+}
+
+void HandleIdlePresentTimer() {
+    if (GameIdling()) {
+        PresentIdleFrame();
     }
 }
 
@@ -265,6 +292,10 @@ LRESULT CALLBACK GameWndProc(HWND window, UINT message, WPARAM wParam,
                 HandleBorderlessRetryTimer(window);
                 return 0;
             }
+            if (wParam == kIdlePresentTimerId) {
+                HandleIdlePresentTimer();
+                return 0;
+            }
             break;
 
         case WM_NCDESTROY: {
@@ -274,7 +305,10 @@ LRESULT CALLBACK GameWndProc(HWND window, UINT message, WPARAM wParam,
             LRESULT result = ForwardToGame(window, message, wParam, lParam);
             KillTimer(window, kBackgroundRestoreTimerId);
             KillTimer(window, kBorderlessRetryTimerId);
+            KillTimer(window, kIdlePresentTimerId);
+            ReleaseIdleDevice();
             g_previousWndProc = nullptr;
+            g_hookedWindow = nullptr;
             g_borderlessRetries = 0;
             ResetBorderlessState();
             return result;
@@ -346,8 +380,16 @@ void InstallWindowHook(HWND window) {
 
     if (previous) {
         g_previousWndProc = reinterpret_cast<WNDPROC>(previous);
+        g_hookedWindow = window;
+        // Armed for the life of the window; the handler does nothing while
+        // the game renders on its own.
+        SetTimer(window, kIdlePresentTimerId, kIdlePresentIntervalMs, nullptr);
     } else {
     }
+}
+
+HWND HookedWindow() {
+    return g_hookedWindow;
 }
 
 }  // namespace bm

@@ -34,6 +34,31 @@ ResetFn g_originalReset = nullptr;
 LONG g_createDeviceHookState = 0;
 bool g_haveForwardedReset = false;
 
+// The device PresentIdleFrame() presents, and the window it presents to. The
+// plugin holds its own reference: GTA destroys and rebuilds its window and
+// device while it settles on a video mode, and a pointer taken from
+// CreateDevice would otherwise dangle until the next CreateDevice replaces
+// it. Only windowed devices are held; keeping an exclusive one alive would
+// stop the game from creating its replacement.
+IDirect3DDevice9* g_idleDevice = nullptr;
+HWND g_idleWindow = nullptr;
+
+void TrackIdleDevice(IDirect3DDevice9* device, HWND window) {
+    if (!device || device == g_idleDevice) {
+        g_idleWindow = window;
+        return;
+    }
+    ReleaseIdleDevice();
+    __try {
+        device->AddRef();
+        g_idleDevice = device;
+        g_idleWindow = window;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        g_idleDevice = nullptr;
+        g_idleWindow = nullptr;
+    }
+}
+
 HWND GetDeviceWindow(IDirect3DDevice9* device,
                      D3DPRESENT_PARAMETERS* params,
                      HWND focusWindow) {
@@ -82,6 +107,9 @@ void AfterCreateDevice(IDirect3DDevice9* device,
         RequireNextReset();
         InstallWindowHook(window);
         InstallGetMessageHook(window);
+        if (mode != ConvertNone && HookedWindow() == window) {
+            TrackIdleDevice(device, window);
+        }
         if (mode == ConvertFullscreen) {
             ApplyBorderlessStyle(window);
             if (BorderlessPending()) {
@@ -240,6 +268,42 @@ void TryHookCreateDeviceThroughTemporaryObject(Direct3DCreate9Fn createD3D9) {
 
 void RequireNextReset() {
     g_haveForwardedReset = false;
+}
+
+void PresentIdleFrame() {
+    if (!g_idleDevice || !g_idleWindow || !IsWindow(g_idleWindow)) {
+        return;
+    }
+    __try {
+        if (g_idleDevice->TestCooperativeLevel() != D3D_OK) {
+            return;
+        }
+        // The swap chain's Present rather than the device's: the device's is
+        // where SA-MP, CLEO scripts and other mods hook in to draw their
+        // interfaces, and the frame being shown again already carries them.
+        // A windowed DISCARD chain with one back buffer keeps the last frame
+        // in place, so nothing but the presentation itself changes.
+        IDirect3DSwapChain9* swapChain = nullptr;
+        if (FAILED(g_idleDevice->GetSwapChain(0, &swapChain)) || !swapChain) {
+            return;
+        }
+        swapChain->Present(nullptr, nullptr, nullptr, nullptr, 0);
+        swapChain->Release();
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+void ReleaseIdleDevice() {
+    IDirect3DDevice9* device = g_idleDevice;
+    g_idleDevice = nullptr;
+    g_idleWindow = nullptr;
+    if (!device) {
+        return;
+    }
+    __try {
+        device->Release();
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
 }
 
 void InstallD3D9Hooks() {
