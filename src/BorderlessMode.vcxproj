@@ -90,11 +90,13 @@
 
   <ItemGroup>
     <ClCompile Include="BorderlessMode.cpp" />
+    <ClCompile Include="core\config.cpp" />
     <ClCompile Include="core\hook.cpp" />
     <ClCompile Include="core\memory.cpp" />
     <ClCompile Include="core\module.cpp" />
     <ClCompile Include="d3d9\device_hooks.cpp" />
     <ClCompile Include="d3d9\present_params.cpp" />
+    <ClCompile Include="game\fps_overlay.cpp" />
     <ClCompile Include="game\patches.cpp" />
     <ClCompile Include="input\cursor.cpp" />
     <ClCompile Include="input\key_filter.cpp" />
@@ -126,12 +128,14 @@
   <ItemGroup>
     <ClInclude Include="resource.h" />
     <ClInclude Include="version.h" />
+    <ClInclude Include="core\config.h" />
     <ClInclude Include="core\hook.h" />
     <ClInclude Include="core\memory.h" />
     <ClInclude Include="core\module.h" />
     <ClInclude Include="d3d9\device_hooks.h" />
     <ClInclude Include="d3d9\present_params.h" />
     <ClInclude Include="game\addresses.h" />
+    <ClInclude Include="game\fps_overlay.h" />
     <ClInclude Include="game\patches.h" />
     <ClInclude Include="input\cursor.h" />
     <ClInclude Include="input\key_filter.h" />
@@ -149,6 +153,13 @@
     <None Include="..\LICENSE" />
     <None Include="..\README.md" />
     <None Include="..\.github\workflows\build.yml" />
+    <None Include="..\Config\BorderlessMode.ini" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+
+  <Target Name="CopyReleaseConfig" AfterTargets="Build"
+          Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <Copy SourceFiles="$(SolutionDir)Config\BorderlessMode.ini"
+          DestinationFolder="$(OutDir)" />
+  </Target>
 </Project>

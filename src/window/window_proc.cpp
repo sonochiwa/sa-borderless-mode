@@ -1,5 +1,6 @@
 #include "window/window_proc.h"
 
+#include "core/config.h"
 #include "d3d9/device_hooks.h"
 #include "game/patches.h"
 #include "input/key_filter.h"
@@ -14,6 +15,7 @@ namespace {
 WNDPROC g_previousWndProc = nullptr;
 HWND g_hookedWindow = nullptr;
 BOOL g_windowIsUnicode = FALSE;
+volatile LONG g_fpsHotkeyPressConsumed = 0;
 
 constexpr UINT_PTR kBackgroundRestoreTimerId = 0xB0DE1E56;
 constexpr UINT kBackgroundRestoreDelayMs = 100;
@@ -205,6 +207,38 @@ void HandleBackgroundRestoreTimer(HWND window) {
     }
 }
 
+// Returns true when the message was the FPS counter hotkey and must not reach
+// the game.
+bool HandleFpsHotkey(UINT message, WPARAM wParam, LPARAM lParam) {
+    const Config& config = GetConfig();
+    if (!config.fpsHotkeyEnabled || config.fpsHotkeyKey == 0 ||
+        wParam != config.fpsHotkeyKey) {
+        return false;
+    }
+
+    const bool keyUp = message == WM_KEYUP || message == WM_SYSKEYUP;
+    if (keyUp) {
+        return InterlockedExchange(&g_fpsHotkeyPressConsumed, 0) != 0;
+    }
+
+    const bool autoRepeat = (lParam & (1L << 30)) != 0;
+    if (!autoRepeat) {
+        const bool modifierDown =
+            config.fpsHotkeyModifier == 0 ||
+            (GetKeyState(static_cast<int>(config.fpsHotkeyModifier)) &
+             0x8000) != 0;
+        if (!modifierDown) {
+            return false;
+        }
+        InterlockedExchange(&g_fpsHotkeyPressConsumed, 1);
+        ToggleFpsCounter();
+        return true;
+    }
+
+    // Autorepeat only belongs to us when the initial press was consumed.
+    return InterlockedCompareExchange(&g_fpsHotkeyPressConsumed, 0, 0) != 0;
+}
+
 // Returns true when a key message must be hidden from the game.
 bool SuppressKeyDown(UINT message, WPARAM wParam, LPARAM lParam) {
     if (wParam == VK_TAB) {
@@ -316,6 +350,9 @@ LRESULT CALLBACK GameWndProc(HWND window, UINT message, WPARAM wParam,
 
         case WM_KEYDOWN:
         case WM_SYSKEYDOWN:
+            if (HandleFpsHotkey(message, wParam, lParam)) {
+                return 0;
+            }
             if (SuppressKeyDown(message, wParam, lParam)) {
                 return 0;
             }
@@ -323,6 +360,9 @@ LRESULT CALLBACK GameWndProc(HWND window, UINT message, WPARAM wParam,
 
         case WM_KEYUP:
         case WM_SYSKEYUP:
+            if (HandleFpsHotkey(message, wParam, lParam)) {
+                return 0;
+            }
             if (SuppressKeyUp(wParam)) {
                 return 0;
             }

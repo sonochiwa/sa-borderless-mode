@@ -8,9 +8,11 @@
 // exclusive mode, while its own frame delay is patched out so the FPS is no
 // longer capped at the refresh rate.
 
+#include "core/config.h"
 #include "core/hook.h"
 #include "core/module.h"
 #include "d3d9/device_hooks.h"
+#include "game/fps_overlay.h"
 #include "game/patches.h"
 #include "input/cursor.h"
 #include "input/key_filter.h"
@@ -25,6 +27,7 @@ namespace {
 
 DWORD WINAPI Initialize(LPVOID) {
     bm::MakeProcessDpiAware();
+    bm::LoadConfig();
 
     MH_STATUS status = MH_Initialize();
     if (status != MH_OK && status != MH_ERROR_ALREADY_INITIALIZED) {
@@ -46,6 +49,7 @@ DWORD WINAPI Initialize(LPVOID) {
     // Direct3DCreate9 while this runs, so keep the stretch between the first
     // create and the apply free of anything slow.
     bm::HookApplyVideoMode();
+    bm::HookFrameOutput();
     bm::HookChangeDisplaySettings();
     bm::InstallD3D9Hooks();
     bm::HookSetCursorPos();
