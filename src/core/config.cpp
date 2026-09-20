@@ -3,13 +3,18 @@
 #include "core/module.h"
 #include "resource.h"
 
+#include <windows.h>
+
 namespace bm {
 namespace {
 
 const wchar_t kFpsCounterSection[] = L"fpsCounter";
+const wchar_t kDefaultCommand[] = L"FPSCOUNTER";
 
-Config g_config;
+constexpr size_t kCommandCapacity = 32;
+
 wchar_t g_iniPath[MAX_PATH] = {};
+char g_command[kCommandCapacity] = {};
 volatile LONG g_showFpsCounter = 0;
 
 // Writes the RCDATA copy of Config\BorderlessMode.ini byte for byte.
@@ -42,6 +47,26 @@ void CreateDefaultIniIfMissing(const wchar_t* path) {
     CloseHandle(file);
 }
 
+// Keeps the letters and digits of the configured word, upper case, the form
+// the message pump filter compares virtual-key codes against.
+void ReadCommand(const wchar_t* path) {
+    wchar_t value[kCommandCapacity] = {};
+    // A missing key keeps the compiled default; a present empty one disables
+    // the command rather than falling back to it.
+    GetPrivateProfileStringW(kFpsCounterSection, L"command", kDefaultCommand,
+                             value, kCommandCapacity, path);
+
+    size_t length = 0;
+    for (const wchar_t* c = value; *c && length < kCommandCapacity - 1; ++c) {
+        if (*c >= L'a' && *c <= L'z') {
+            g_command[length++] = static_cast<char>(*c - L'a' + 'A');
+        } else if ((*c >= L'A' && *c <= L'Z') || (*c >= L'0' && *c <= L'9')) {
+            g_command[length++] = static_cast<char>(*c);
+        }
+    }
+    g_command[length] = '\0';
+}
+
 // Runs on a pool thread. Writes whatever the flag currently says rather than
 // a captured value, so two toggles in quick succession converge on the real
 // state whichever order their work items run in.
@@ -65,20 +90,11 @@ void LoadConfig() {
     InterlockedExchange(
         &g_showFpsCounter,
         GetPrivateProfileIntW(kFpsCounterSection, L"show", 0, g_iniPath) != 0);
-    g_config.fpsHotkeyEnabled =
-        GetPrivateProfileIntW(kFpsCounterSection, L"hotkeyEnabled", 1,
-                              g_iniPath) != 0;
-    g_config.fpsHotkeyModifier = static_cast<UINT>(
-        GetPrivateProfileIntW(kFpsCounterSection, L"hotkeyModifier", VK_MENU,
-                              g_iniPath));
-    // A missing key keeps the default; a present 0 disables the hotkey.
-    g_config.fpsHotkeyKey = static_cast<UINT>(
-        GetPrivateProfileIntW(kFpsCounterSection, L"hotkeyKey", VK_F11,
-                              g_iniPath));
+    ReadCommand(g_iniPath);
 }
 
-const Config& GetConfig() {
-    return g_config;
+const char* FpsCounterCommand() {
+    return g_command;
 }
 
 bool ShowFpsCounter() {
@@ -89,9 +105,9 @@ bool ToggleFpsCounter() {
     const LONG shown = ShowFpsCounter() ? 0 : 1;
     InterlockedExchange(&g_showFpsCounter, shown);
 
-    // Toggled from the window procedure, on the game thread. Writing the INI
-    // there stalls a frame on file I/O for a setting nothing is waiting for,
-    // so it goes to a pool thread.
+    // Toggled on the game thread. Writing the INI there stalls a frame on
+    // file I/O for a setting nothing is waiting for, so it goes to a pool
+    // thread.
     if (g_iniPath[0] &&
         !QueueUserWorkItem(&SaveFpsCounterStateWorker, nullptr,
                            WT_EXECUTEDEFAULT)) {

@@ -21,8 +21,9 @@ and capture tools working.
   overlays such as the NVIDIA App keep tracking it across Alt+Tab.
 - Already-windowed setups only lose the vsync wait.
 - Declares the process DPI aware, so the game starts on a scaled display.
-- FPS counter on Alt+F11 that counts the game's own frames, for when
-  external counters cannot measure a borderless window.
+- FPS counter that counts the game's own frames, for when external counters
+  cannot measure a borderless window; type `FPSCOUNTER` in game to show or
+  hide it.
 
 ## Requirements
 
@@ -52,12 +53,10 @@ is missing:
 | --- | ---: | --- |
 | `[fpsCounter]` | | |
 | `show` | `0` | `1` shows the FPS counter. Written back whenever the counter is toggled in game. |
-| `hotkeyEnabled` | `1` | `0` disables the hotkey without removing the key. |
-| `hotkeyModifier` | `18` | Modifier as a decimal Win32 virtual-key code. `18` is Alt; `0` means no modifier. |
-| `hotkeyKey` | `122` | Main key as a decimal Win32 virtual-key code; `122` is F11. `0` disables the hotkey. |
+| `command` | `FPSCOUNTER` | Word typed in game, like a cheat, that shows or hides the counter. Letters and digits only; empty disables it. |
 
-The borderless conversion itself has no settings. The hotkey is read once at
-startup.
+The borderless conversion itself has no settings. The word is read once at
+startup and works with the SA-MP chat box open or closed.
 
 ## Release Integrity
 

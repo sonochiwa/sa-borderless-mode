@@ -3,6 +3,7 @@
 #include "core/hook.h"
 #include "core/module.h"
 #include "input/key_filter.h"
+#include "input/typed_command.h"
 
 namespace bm {
 namespace {
@@ -17,6 +18,7 @@ PeekMessageTFn g_originalPeekMessageW = nullptr;
 GetMessageTFn g_originalGetMessageA = nullptr;
 GetMessageTFn g_originalGetMessageW = nullptr;
 HHOOK g_getMessageHook = nullptr;
+DWORD g_gameThreadId = 0;
 
 void FilterQueuedInputMessage(MSG* msg) {
     __try {
@@ -46,12 +48,26 @@ void FilterQueuedInputMessage(MSG* msg) {
     }
 }
 
+// Typed-command keys are taken here, from the messages the game thread
+// removes from its queue: this is where every keyboard message passes
+// before the game, SA-MP or any window procedure sees it, whether or not the
+// chat box is open. Not from the WH_GETMESSAGE hook below, which sees the
+// same messages again.
+void RecordRemovedMessage(const MSG* msg) {
+    if (g_gameThreadId && GetCurrentThreadId() == g_gameThreadId) {
+        RecordTypedKey(msg);
+    }
+}
+
 BOOL WINAPI HookedPeekMessageA(LPMSG msg, HWND window, UINT filterMin,
                                UINT filterMax, UINT removeFlags) {
     BOOL result = g_originalPeekMessageA(msg, window, filterMin, filterMax,
                                          removeFlags);
     if (result) {
         FilterQueuedInputMessage(msg);
+        if (removeFlags & PM_REMOVE) {
+            RecordRemovedMessage(msg);
+        }
     }
     return result;
 }
@@ -62,6 +78,9 @@ BOOL WINAPI HookedPeekMessageW(LPMSG msg, HWND window, UINT filterMin,
                                          removeFlags);
     if (result) {
         FilterQueuedInputMessage(msg);
+        if (removeFlags & PM_REMOVE) {
+            RecordRemovedMessage(msg);
+        }
     }
     return result;
 }
@@ -71,6 +90,7 @@ BOOL WINAPI HookedGetMessageA(LPMSG msg, HWND window, UINT filterMin,
     BOOL result = g_originalGetMessageA(msg, window, filterMin, filterMax);
     if (result != 0 && result != -1) {
         FilterQueuedInputMessage(msg);
+        RecordRemovedMessage(msg);
     }
     return result;
 }
@@ -80,6 +100,7 @@ BOOL WINAPI HookedGetMessageW(LPMSG msg, HWND window, UINT filterMin,
     BOOL result = g_originalGetMessageW(msg, window, filterMin, filterMax);
     if (result != 0 && result != -1) {
         FilterQueuedInputMessage(msg);
+        RecordRemovedMessage(msg);
     }
     return result;
 }
@@ -117,6 +138,7 @@ void InstallGetMessageHook(HWND window) {
         return;
     }
     DWORD threadId = GetWindowThreadProcessId(window, nullptr);
+    g_gameThreadId = threadId;
     g_getMessageHook = SetWindowsHookExW(WH_GETMESSAGE, &GetMsgHookProc,
                                          SelfModule(), threadId);
 }

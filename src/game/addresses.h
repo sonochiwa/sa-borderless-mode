@@ -22,6 +22,13 @@ constexpr unsigned char kShowRasterSignature[] = {
 // Frame counter advanced once per game frame; the FPS sample is taken from it.
 constexpr uintptr_t kFrameCounter = 0x00B7CB4C;
 
+// CMessages::AddMessageJumpQ - the text box the game uses for its own
+// notices. Confirms the FPS counter command on screen.
+constexpr uintptr_t kAddMessageJumpQ = 0x0069F1E0;
+constexpr unsigned char kAddMessageJumpQSignature[] = {
+    0x81, 0xEC, 0x20, 0x03, 0x00, 0x00, 0x56
+};
+
 // The game's IDirect3DDevice9*.
 constexpr uintptr_t kDirect3DDevice = 0x00C97C28;
 

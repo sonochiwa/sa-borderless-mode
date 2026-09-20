@@ -2,7 +2,9 @@
 
 #include "core/config.h"
 #include "core/hook.h"
+#include "core/memory.h"
 #include "game/addresses.h"
+#include "input/typed_command.h"
 
 #include <d3d9.h>
 #include <windows.h>
@@ -14,6 +16,9 @@ namespace bm {
 namespace {
 
 using ShowRasterFn = void (__cdecl*)(void* camera);
+using AddMessageJumpQFn = void (__cdecl*)(const char* text, unsigned int time,
+                                          unsigned short flag,
+                                          bool addToPreviousBrief);
 
 ShowRasterFn g_originalShowRaster = nullptr;
 
@@ -108,12 +113,34 @@ void DrawFpsOverlay(IDirect3DDevice9* device, unsigned fps) {
     }
 }
 
+void ShowGameMessage(const char* text) {
+    if (!BytesMatch(reinterpret_cast<const void*>(game::kAddMessageJumpQ),
+                    game::kAddMessageJumpQSignature,
+                    sizeof(game::kAddMessageJumpQSignature))) {
+        return;
+    }
+    reinterpret_cast<AddMessageJumpQFn>(game::kAddMessageJumpQ)(text, 2500, 0,
+                                                                false);
+}
+
+// Once per frame on the game thread: the typed word is acted on where the
+// counter it controls is drawn.
+void ServiceTypedCommand() {
+    if (!ConsumeTypedCommand()) {
+        return;
+    }
+    const bool shown = ToggleFpsCounter();
+    ShowGameMessage(shown ? "~g~FPS counter: on" : "~r~FPS counter: off");
+}
+
 void __cdecl HookedShowRaster(void* camera) {
     static ULONGLONG sampleStart = 0;
     static DWORD sampleStartFrame = 0;
     static unsigned measuredFps = 0;
 
     __try {
+        ServiceTypedCommand();
+
         // GTA advances this counter once per game frame. Reading it here keeps
         // the FPS overlay on GTA's final frame-output path instead of
         // intercepting D3D9 Present, which must remain untouched for

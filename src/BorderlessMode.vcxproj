@@ -101,6 +101,7 @@
     <ClCompile Include="input\cursor.cpp" />
     <ClCompile Include="input\key_filter.cpp" />
     <ClCompile Include="input\message_pump.cpp" />
+    <ClCompile Include="input\typed_command.cpp" />
     <ClCompile Include="window\borderless.cpp" />
     <ClCompile Include="window\display_mode.cpp" />
     <ClCompile Include="window\window_proc.cpp" />
@@ -140,6 +141,7 @@
     <ClInclude Include="input\cursor.h" />
     <ClInclude Include="input\key_filter.h" />
     <ClInclude Include="input\message_pump.h" />
+    <ClInclude Include="input\typed_command.h" />
     <ClInclude Include="window\borderless.h" />
     <ClInclude Include="window\display_mode.h" />
     <ClInclude Include="window\window_proc.h" />

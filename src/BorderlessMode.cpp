@@ -17,6 +17,7 @@
 #include "input/cursor.h"
 #include "input/key_filter.h"
 #include "input/message_pump.h"
+#include "input/typed_command.h"
 #include "window/display_mode.h"
 
 #include <windows.h>
@@ -28,6 +29,7 @@ namespace {
 DWORD WINAPI Initialize(LPVOID) {
     bm::MakeProcessDpiAware();
     bm::LoadConfig();
+    bm::SetTypedCommandWord(bm::FpsCounterCommand());
 
     MH_STATUS status = MH_Initialize();
     if (status != MH_OK && status != MH_ERROR_ALREADY_INITIALIZED) {

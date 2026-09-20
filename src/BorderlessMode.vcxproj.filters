@@ -42,6 +42,9 @@
     <ClCompile Include="input\message_pump.cpp">
       <Filter>input</Filter>
     </ClCompile>
+    <ClCompile Include="input\typed_command.cpp">
+      <Filter>input</Filter>
+    </ClCompile>
     <ClCompile Include="window\borderless.cpp">
       <Filter>window</Filter>
     </ClCompile>
@@ -89,6 +92,9 @@
       <Filter>input</Filter>
     </ClInclude>
     <ClInclude Include="input\message_pump.h">
+      <Filter>input</Filter>
+    </ClInclude>
+    <ClInclude Include="input\typed_command.h">
       <Filter>input</Filter>
     </ClInclude>
     <ClInclude Include="window\borderless.h">

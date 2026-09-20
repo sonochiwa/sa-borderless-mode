@@ -7,6 +7,6 @@ Installation
   Extract BorderlessMode.asi and BorderlessMode.ini into the game directory
   or its scripts directory, then start the game.
 
-Alt+F11 shows or hides the FPS counter.
+Type FPSCOUNTER in game to show or hide the FPS counter.
 
 Created by sonochiwa. MIT license.
