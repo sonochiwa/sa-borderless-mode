@@ -3,11 +3,13 @@
 #include <tlhelp32.h>
 
 #include <cstring>
+#include <cwchar>
 
 namespace bm {
 namespace {
 
 constexpr size_t kMaxFrozenThreads = 256;
+constexpr DWORD kFreezeLockWaitMs = 10000;
 
 struct ThreadFreeze {
     HANDLE handles[kMaxFrozenThreads];
@@ -86,7 +88,40 @@ bool AnyThreadInRange(const ThreadFreeze* freeze, uintptr_t begin,
     return false;
 }
 
+// Separate from ApplyAtomicPatchSet, whose freeze lock has a destructor that
+// __try cannot share a function with.
+bool WritePatches(const BytePatch* patches, size_t count) {
+    __try {
+        for (size_t i = 0; i < count; ++i) {
+            std::memcpy(reinterpret_cast<void*>(patches[i].address),
+                        patches[i].patched, patches[i].size);
+        }
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 }  // namespace
+
+ThreadFreezeLock::ThreadFreezeLock() : mutex(nullptr), owned(false) {
+    wchar_t name[64] = {};
+    swprintf_s(name, L"Local\\GtaSaMinHookFreeze-%lu", GetCurrentProcessId());
+    mutex = CreateMutexW(nullptr, FALSE, name);
+    if (mutex) {
+        const DWORD wait = WaitForSingleObject(mutex, kFreezeLockWaitMs);
+        owned = wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED;
+    }
+}
+
+ThreadFreezeLock::~ThreadFreezeLock() {
+    if (owned) {
+        ReleaseMutex(mutex);
+    }
+    if (mutex) {
+        CloseHandle(mutex);
+    }
+}
 
 bool BytesMatch(const void* address, const unsigned char* expected, size_t size) {
     __try {
@@ -129,23 +164,12 @@ PatchSetResult ApplyAtomicPatchSet(const BytePatch* patches, size_t count,
         return result;
     }
 
+    ThreadFreezeLock lock;
     ThreadFreeze freeze = {};
     const bool frozen = FreezeOtherThreads(&freeze);
     const bool blocked =
         frozen && AnyThreadInRange(&freeze, rangeBegin, rangeEnd);
-    bool wrote = false;
-
-    if (!blocked) {
-        __try {
-            for (size_t i = 0; i < count; ++i) {
-                std::memcpy(reinterpret_cast<void*>(patches[i].address),
-                            patches[i].patched, patches[i].size);
-            }
-            wrote = true;
-        } __except (EXCEPTION_EXECUTE_HANDLER) {
-            wrote = false;
-        }
-    }
+    const bool wrote = !blocked && WritePatches(patches, count);
 
     result.frozeThreads = frozen;
     result.frozenThreads = static_cast<unsigned>(freeze.count);

@@ -23,6 +23,8 @@ bool InstallHook(void* target, void* detour, void** original) {
 }
 
 bool ApplyQueuedHooks() {
+    // MH_ApplyQueued suspends every other thread while it patches.
+    ThreadFreezeLock lock;
     MH_STATUS status = MH_ApplyQueued();
     return status == MH_OK;
 }

@@ -7,6 +7,27 @@
 
 namespace bm {
 
+// Held around every suspension of all other threads: this plugin's own
+// (ApplyAtomicPatchSet) and MinHook's (ApplyQueuedHooks). Two plugins that
+// suspend all threads at once from different threads suspend each other and
+// the game hangs before its window appears; this plugin and Audio Runtime
+// did so in about one start in thirty right after a plugin was copied. The
+// mutex is named per process, so every plugin that takes it around its
+// freezes waits for the others. A holder can itself be suspended for a
+// moment by a plugin that does not take it, so the wait gives up after a
+// while and the freeze goes ahead.
+class ThreadFreezeLock {
+public:
+    ThreadFreezeLock();
+    ~ThreadFreezeLock();
+    ThreadFreezeLock(const ThreadFreezeLock&) = delete;
+    ThreadFreezeLock& operator=(const ThreadFreezeLock&) = delete;
+
+private:
+    HANDLE mutex;
+    bool owned;
+};
+
 // memcmp that treats an unreadable address as "no match" instead of crashing.
 bool BytesMatch(const void* address, const unsigned char* expected, size_t size);
 
