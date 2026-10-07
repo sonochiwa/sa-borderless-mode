@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.9.1
+
+- Fixed a rare hang at start-up when another plugin hooks the game at the
+  same moment, such as Audio Runtime.
+
 ## 1.9.0
 
 - Fixed the NVIDIA App overlay losing the game after Alt+Tab, which left its
